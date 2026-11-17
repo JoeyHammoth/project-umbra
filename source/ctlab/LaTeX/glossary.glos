@@ -1,0 +1,10 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% GLOSSARY
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newabbreviation[category=acronym]{CAT}{cat}{computed axial tomography}
+\newabbreviation[category=acronym]{CT}{ct}{computed tomography}
+\newabbreviation[category=acronym]{DFT}{dft}{discrete Fourier transform}
+\newabbreviation[category=acronym]{FFT}{fft}{fast Fourier transform}
+\newabbreviation[category=acronym]{MRI}{mri}{magnetic resonance imaging}
+\newabbreviation[category=acronym]{PET}{pet}{positron emission tomography}
