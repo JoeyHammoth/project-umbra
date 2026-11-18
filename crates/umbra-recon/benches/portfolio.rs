@@ -27,8 +27,8 @@ use umbra_forward::scene::SceneSpec;
 use umbra_forward::{build_system_2d, expected};
 use umbra_physics::{generate_default, Fidelity, FluxTable};
 use umbra_recon::{
-    A1Config, A2Config, A3Config, Control, OpacityPdhg, PoissonMap, Problem, Solver, StepReport,
-    TransmissionEm,
+    A1Config, A2Config, A3Config, A4Config, Control, OpacityPdhg, PoissonMap, Problem, Solver,
+    SparseDeviation, StepReport, TransmissionEm,
 };
 
 /// The data-fit level every solver is timed to, in NLL.
@@ -49,6 +49,8 @@ struct Data {
     flux: FluxTable,
     params: ForwardParams,
     exposure_s: f32,
+    /// The known structure A4 anchors on: the scene's bulk density everywhere.
+    reference: Vec<f32>,
 }
 
 impl Data {
@@ -96,6 +98,7 @@ fn dataset(scene: &SceneSpec) -> Data {
         flux,
         params,
         exposure_s: scene.exposure_s,
+        reference: vec![scene.physics.rho_bulk; scene.grid.cell_count()],
     }
 }
 
@@ -135,6 +138,7 @@ fn portfolio(scene: &SceneSpec) -> Vec<Entry> {
     };
     let a2 = A2Config::from_scene(scene);
     let a3 = A3Config::from_scene(scene);
+    let a4 = A4Config::from_scene(scene);
     vec![
         Entry {
             id: "a1-transmission-em",
@@ -147,6 +151,16 @@ fn portfolio(scene: &SceneSpec) -> Vec<Entry> {
         Entry {
             id: "a3-opacity-pdhg",
             make: Box::new(move |data| Box::new(OpacityPdhg::new(&data.problem(), a3.clone()))),
+        },
+        Entry {
+            id: "a4-sparse-deviation",
+            make: Box::new(move |data| {
+                Box::new(SparseDeviation::new(
+                    &data.problem(),
+                    a4.clone(),
+                    &data.reference,
+                ))
+            }),
         },
     ]
 }

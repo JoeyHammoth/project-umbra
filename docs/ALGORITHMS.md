@@ -8,7 +8,7 @@ data, with each method's failure mode visible. ★ marks the distinctive items.
 | A1 | Transmission EM family (Lange–Carson, OSTR, SPS) | `umbra-recon` | `TransmissionEm` implemented (L0), ordered subsets with a monotone guard |
 | A2 | Nonlinear Poisson MAP + Huber TV, L-BFGS-B, box constraints | `umbra-recon` | `PoissonMap` implemented: projected L-BFGS over Huber TV, L0 and L1 |
 | A3 | Opacity-domain inversion + Chambolle–Pock PDHG with TV | `umbra-recon` | `OpacityPdhg` implemented: safeguarded Newton per ray, delta-method weights, PDHG on `[L; ∇]` with a primal–dual gap |
-| A4 ★ | Reference-anchored one-sided sparse deviation (FISTA) | `umbra-recon` | not started |
+| A4 ★ | Reference-anchored one-sided sparse deviation (FISTA) | `umbra-recon` | `SparseDeviation` implemented: monotone FISTA, closed-form one-sided prox, void and inclusion modes |
 | A5 | Plug-and-play with a learned denoiser (ONNX) | `umbra-recon` + web worker | not started (stretch) |
 | A6 ★ | Profile-likelihood scan, Asimov, Euler-characteristic LEE | `umbra-stats` | `asimov_significance` implemented |
 | A7 ★ | Parametric Bayesian void inversion: analytic chords, MCMC, nested sampling | `umbra-infer` | parameterisation only |
@@ -48,6 +48,26 @@ orders of magnitude below its start, the final iterate stays within a factor of
 ten of that best, and the gap falls and stays non-negative. The rise count is
 still printed on every test run, so the non-monotonicity is a measured number in
 the log rather than a claim nobody checks.
+
+A4 is measured against A2 on both scenes, on the void's own footprint taken from
+the scene geometry rather than from "wherever the truth is low" — the slabs are
+2 m thick in a 16 m grid, so the naive mask measures the vacuum outside them.
+The deviation never leaves `[−ρ_ref, 0]`, and the objective never rises: the
+monotone safeguard in the step is what makes that a property of the algorithm
+rather than a hope about the inertia. On the shared single-view scene A4 recovers
+the corridor to a mean error of **0.099 g cm⁻³ against A2's 0.143**, while fitting
+*slightly better* (`−4.665487e8` against `−4.665473e8`) — the one-sided bound says
+the corridor cannot be denser than the rock around it, which is information a
+smoothness prior does not have.
+
+On the four-view scene the ordering reverses: A2 reaches **0.160** in the buried
+capsule against A4's **0.374**. That is the honest boundary of the method. Four
+views already supply the information TV was standing in for, and the `ℓ₁` weight
+then only costs contrast. A4's advantage is real but specific — one view, or a
+small cavity in a known structure — and a portfolio where each member wins
+somewhere is more useful than one whose favourite wins everywhere. The test
+asserts the first result and records the second rather than dropping the scene
+that disagrees.
 
 The scene has one detector, so its 32 rays are a single view. That is enough to
 compare solvers and not enough to test ordered-subset acceleration, which needs

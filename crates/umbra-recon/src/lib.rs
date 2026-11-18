@@ -5,6 +5,7 @@
 //! | [`a1`] | ordered-subset transmission EM, L0 only |
 //! | [`a2`] | nonlinear Poisson MAP with Huber TV, projected L-BFGS |
 //! | [`a3`] | opacity-domain inversion followed by Chambolle–Pock PDHG |
+//! | [`a4`] | reference-anchored one-sided sparse deviation, FISTA |
 //!
 //! Solvers are driven one step at a time so a caller can show progressive
 //! results and cancel between steps; see [`Solver`].
@@ -20,10 +21,12 @@ use umbra_physics::{Fidelity, FluxTable};
 pub mod a1;
 pub mod a2;
 pub mod a3;
+pub mod a4;
 
 pub use a1::{A1Config, TransmissionEm};
 pub use a2::{A2Config, PoissonMap};
 pub use a3::{A3Config, OpacityPdhg};
+pub use a4::{prox, A4Config, DeviationSign, SparseDeviation};
 
 /// One observation: the discretised experiment, the physics that produced the
 /// counts, and the counts themselves.
@@ -163,19 +166,44 @@ pub(crate) fn poisson_nll(lambda: &[f32], counts: &[f32]) -> f64 {
 ///
 /// This is a parameter rather than a `Config` field because an image is data:
 /// its length must match the grid, the UI has to be able to re-run a solver from
-/// the answer it is showing, and a config is a value it caches. A4's reference
-/// image is the same kind of input and belongs here beside `rho` when that
-/// solver lands.
+/// the answer it is showing, and a config is a value it caches. The reference
+/// image A4 anchors on is the same kind of input, so it lives here too.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Start<'a> {
     /// Initial density, one entry per voxel, in g cm⁻³. Clamped into the box.
     pub rho: Option<&'a [f32]>,
+    /// Known structure `ρ_ref`, one entry per voxel, in g cm⁻³.
+    ///
+    /// Required by A4, which solves for `δ = ρ − ρ_ref` and bounds `δ` by the
+    /// reference itself; every other solver ignores it. It is not optional in
+    /// A4's construction because a reference-anchored method given no reference
+    /// is solving a different problem under the same name.
+    pub reference: Option<&'a [f32]>,
 }
 
 impl<'a> Start<'a> {
     /// Begin from an existing estimate.
     pub fn from_rho(rho: &'a [f32]) -> Self {
-        Self { rho: Some(rho) }
+        Self {
+            rho: Some(rho),
+            ..Self::default()
+        }
+    }
+
+    /// Anchor on a known structure, starting the deviation at zero.
+    pub fn from_reference(reference: &'a [f32]) -> Self {
+        Self {
+            reference: Some(reference),
+            ..Self::default()
+        }
+    }
+
+    /// Anchor on a known structure and begin from an existing estimate.
+    pub fn with_reference(self, reference: &'a [f32]) -> Self {
+        Self {
+            reference: Some(reference),
+            ..self
+        }
     }
 }
 
