@@ -45,6 +45,15 @@ jobs:
       - name: Build wasm core
         run: cargo build -p umbra-wasm --target wasm32-unknown-unknown --release
 
+  licensing:
+    name: Licensing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Manifests and fixture provenance
+        run: bash tools/check-licensing.sh
+
   web:
     name: Web build
     runs-on: ubuntu-latest

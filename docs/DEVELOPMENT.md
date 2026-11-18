@@ -58,7 +58,11 @@ oracle parity tests compare against. Do not import it into the build.
 2. `cargo clippy --workspace --all-targets -- -D warnings`
 3. `cargo test --workspace`
 4. `cargo build -p umbra-wasm --target wasm32-unknown-unknown`
-5. `npm install --no-audit --no-fund && npm run build` in `web/`
+5. `bash tools/check-licensing.sh` — every manifest declares a licence, and
+   every non-Rust file under `crates/*/tests/` is registered in
+   `tools/fixture-origins.txt`. A fixture registered as `third-party` must also
+   be named in `THIRD-PARTY-NOTICES.md`, where its notice lives
+6. `npm install --no-audit --no-fund && npm run build` in `web/`
 
 Gates are not advisory: fix the cause, never the assertion.
 
