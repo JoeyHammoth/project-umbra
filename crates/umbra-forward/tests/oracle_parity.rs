@@ -127,6 +127,17 @@ fn traversal_matches_the_python_oracle() {
         // reproducible (a circle at h = 0.5 m is a staircase); the measured gap
         // is still in the fixture, it is just not asserted.
         let analytic_tolerance = field(&fixture, "analytic_tolerance").as_f64();
+        // A curved boundary cannot be reproduced ray by ray at any grid a
+        // committed fixture can hold: the tip of an ellipse shifts by up to one
+        // cell, and at h = 1 cm on a 1.4 m chord that is ~1e-2 regardless of how
+        // correct the traversal is. The assertion that *is* meaningful there is
+        // the bias, the mean signed gap: a half-voxel convention error, a
+        // transposed axis or a dropped border cell shifts every ray the same way,
+        // while rasterisation noise averages out over the fan. Fixtures opt into
+        // it with this field; the per-ray worst is printed either way.
+        let analytic_mean_tolerance = fixture
+            .get("analytic_mean_tolerance")
+            .and_then(Value::as_f64);
         let analytic_floor = number(field(&fixture, "analytic_floor"));
         let max_path_m = number(field(&fixture, "max_path_m")) as f32;
 
@@ -182,6 +193,9 @@ fn traversal_matches_the_python_oracle() {
         let opacity = system.opacity(&density);
         assert_eq!(opacity.len(), rays.len(), "{case}: ray count");
 
+        let mut bias_sum = 0.0f64;
+        let mut bias_count = 0usize;
+        let mut worst_analytic_case = 0.0f64;
         for (index, ((actual, voxel), analytic)) in opacity
             .iter()
             .zip(expected_voxel.iter())
@@ -198,20 +212,41 @@ fn traversal_matches_the_python_oracle() {
                  {voxel:.6e} g/cm2 (relative {relative:.2e}, tolerance {voxel_tolerance:.0e})"
             );
 
-            if let Some(tolerance) = analytic_tolerance {
-                if analytic.abs() > analytic_floor {
-                    let analytic_relative = (actual - analytic).abs() / analytic.abs();
-                    worst_analytic = worst_analytic.max(analytic_relative);
+            if analytic.abs() > analytic_floor {
+                let signed = (actual - analytic) / analytic;
+                bias_sum += signed;
+                bias_count += 1;
+                worst_analytic_case = worst_analytic_case.max(signed.abs());
+                if let Some(tolerance) = analytic_tolerance {
+                    worst_analytic = worst_analytic.max(signed.abs());
                     assert!(
-                        analytic_relative <= tolerance,
+                        signed.abs() <= tolerance,
                         "{case} ray {index}: traversal {actual:.6e} vs analytic chord \
-                         {analytic:.6e} g/cm2 (relative {analytic_relative:.2e}, \
-                         tolerance {tolerance:.0e})"
+                         {analytic:.6e} g/cm2 (relative {:.2e}, tolerance {tolerance:.0e})",
+                        signed.abs()
                     );
                 }
             }
 
             compared += 1;
+        }
+
+        if let Some(tolerance) = analytic_mean_tolerance {
+            assert!(
+                bias_count > 0,
+                "{case}: no ray clears the analytic floor, so the mean gap is undefined"
+            );
+            let bias = bias_sum / bias_count as f64;
+            println!(
+                "{case}: mean signed gap {bias:+.2e} over {bias_count} rays \
+                 (worst {worst_analytic_case:+.2e}, allowance {tolerance:.0e})"
+            );
+            assert!(
+                bias.abs() <= tolerance,
+                "{case}: mean signed gap {bias:+.2e} over {bias_count} rays exceeds \
+                 {tolerance:.0e}; this is the systematic part that a half-voxel shift, \
+                 a transposed axis or a dropped border cell would move"
+            );
         }
     }
 
