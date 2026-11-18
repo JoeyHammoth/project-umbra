@@ -1091,8 +1091,8 @@ Flakes are not retried into silence. A flaky test is quarantined with an issue, 
 | # | Milestone | Deliverable | Exit criteria | Status |
 |---|---|---|---|---|
 | M0 | Foundation | workspace, gates, docs, board, wiki | builds green on `main`; every crate exists with its types | **done** |
-| M1 | Physics core and forward model | tables, 2-D DDA, L0/L1 with exact gradients, Poisson simulator | traversal matches analytic chords; MC agrees with `λ` by χ² | next |
-| M2 | Reconstruction portfolio | A1–A4 on identical data, Fisher error bars | each solver has a convergence test, benchmark and a result on the default scene | |
+| M1 | Physics core and forward model | tables, 2-D DDA, L0/L1 with exact gradients, Poisson simulator | traversal matches analytic chords; MC agrees with `λ` by χ² | **done** |
+| M2 | Reconstruction portfolio | A1–A4 on identical data, Fisher error bars | each solver has a convergence test, benchmark and a result on the default scene | next |
 | M3 | Detection and calibration | A6 scan, LRT refinement, Asimov, LEE, nuisances, A8, SBC | H0 false-positive rate at 3σ within ±20% over 10⁴ datasets | |
 | M4 | Inference, design, visibility | A7 posterior + evidence, A9 placement, A10 PSF and roses | intervals cover truth; greedy beats manual placement | |
 | M5 | Web experience | `ComputeBus`, workers, Observatory, Detect/Design/Characterise, URL codec, PWA | budgets met; a shared URL reproduces scene and counts exactly | |
