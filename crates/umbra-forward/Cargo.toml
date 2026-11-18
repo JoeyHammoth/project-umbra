@@ -10,3 +10,8 @@ description = "System builder, forward/adjoint model and analytic chord model fo
 [dependencies]
 umbra-core.workspace = true
 umbra-physics.workspace = true
+
+# Test-only: reads the committed oracle fixtures. Deliberately not a runtime
+# dependency, so the wasm bundle and the compute crates stay dependency-free.
+[dev-dependencies]
+serde_json = "1"
