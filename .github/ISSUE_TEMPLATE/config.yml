@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Design specification
+    url: https://github.com/JoeyHammoth/project-umbra/blob/main/source/UMBRA_DESIGN_SPEC.md
+    about: The equations, the algorithm portfolio and the architecture this repo implements.
+  - name: Contributing guide
+    url: https://github.com/JoeyHammoth/project-umbra/blob/main/CONTRIBUTING.md
+    about: Branch, commit and PR conventions, and the gates a change must pass.

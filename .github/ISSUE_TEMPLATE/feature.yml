@@ -1,0 +1,54 @@
+name: Feature or task
+description: A tracer-bullet slice of work, verifiable on its own.
+title: "[area] "
+labels: ["type:feat"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One slice, not a layer. A completed slice is demoable or verifiable on its own.
+        Name the spec section it comes from, and say what it does *not* cover.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why this exists, and where it sits in the spec or roadmap.
+      placeholder: Spec §5.3; roadmap M1; prerequisite for every solver.
+    validations:
+      required: true
+
+  - type: textarea
+    id: build
+    attributes:
+      label: What to build
+      description: The end-to-end behaviour this makes work, from the user's or the caller's perspective. Not a file-by-file plan.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Checkable statements. Include the numeric tolerance or budget where one applies.
+      value: |
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+
+  - type: textarea
+    id: blockers
+    attributes:
+      label: Blocked by
+      description: Issue references that must land first, or "None (can start immediately)".
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: What this deliberately does not do, so review does not expand.
+    validations:
+      required: false
