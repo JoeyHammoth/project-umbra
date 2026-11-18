@@ -1,0 +1,12 @@
+[package]
+name = "umbra-recon"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Reconstruction solvers A1-A5 for UMBRA"
+
+[dependencies]
+umbra-core.workspace = true
+umbra-forward.workspace = true
+umbra-physics.workspace = true
