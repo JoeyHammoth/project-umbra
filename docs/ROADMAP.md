@@ -41,7 +41,7 @@ the Lab.
 
 - [x] A1 transmission EM baseline (L0)
 - [x] A2 nonlinear Poisson MAP with L-BFGS-B and Huber TV
-- A3 opacity inversion + PDHG
+- [x] A3 opacity inversion + PDHG
 - A4 one-sided sparse deviation with FISTA
 - Uncertainty: Fisher/Laplace error bars on every result card
 

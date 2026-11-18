@@ -467,6 +467,7 @@ impl Solver for PoissonMap {
             return StepReport {
                 iteration: self.iteration,
                 objective: Some(self.objective),
+                gap: None,
                 converged: self.converged,
             };
         }
@@ -486,6 +487,7 @@ impl Solver for PoissonMap {
             return StepReport {
                 iteration: self.iteration,
                 objective: Some(self.objective),
+                gap: None,
                 converged: true,
             };
         }
@@ -554,6 +556,7 @@ impl Solver for PoissonMap {
         StepReport {
             iteration: self.iteration,
             objective: Some(self.objective),
+            gap: None,
             converged: self.converged,
         }
     }

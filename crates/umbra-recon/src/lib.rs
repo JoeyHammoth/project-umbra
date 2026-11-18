@@ -4,6 +4,7 @@
 //! |---|---|
 //! | [`a1`] | ordered-subset transmission EM, L0 only |
 //! | [`a2`] | nonlinear Poisson MAP with Huber TV, projected L-BFGS |
+//! | [`a3`] | opacity-domain inversion followed by Chambolle–Pock PDHG |
 //!
 //! Solvers are driven one step at a time so a caller can show progressive
 //! results and cancel between steps; see [`Solver`].
@@ -18,9 +19,11 @@ use umbra_physics::{Fidelity, FluxTable};
 
 pub mod a1;
 pub mod a2;
+pub mod a3;
 
 pub use a1::{A1Config, TransmissionEm};
 pub use a2::{A2Config, PoissonMap};
+pub use a3::{A3Config, OpacityPdhg};
 
 /// One observation: the discretised experiment, the physics that produced the
 /// counts, and the counts themselves.
@@ -183,6 +186,13 @@ pub struct StepReport {
     pub iteration: u32,
     /// Current value of the objective, if the solver has one.
     pub objective: Option<f64>,
+    /// Primal–dual gap, for a solver that has a dual certificate.
+    ///
+    /// A1 and A2 prove nothing about optimality: they stop on a relative
+    /// decrease or on a projected-gradient ratio, which is a statement about the
+    /// iterates, not about the answer. A3 can bound its own distance from the
+    /// optimum, so it reports that bound rather than asking to be believed.
+    pub gap: Option<f64>,
     /// Whether the solver considers itself converged.
     pub converged: bool,
 }

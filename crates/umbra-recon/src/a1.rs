@@ -402,6 +402,7 @@ impl Solver for TransmissionEm {
             return StepReport {
                 iteration: self.iteration,
                 objective: Some(self.objective),
+                gap: None,
                 converged: self.converged,
             };
         }
@@ -411,6 +412,7 @@ impl Solver for TransmissionEm {
         StepReport {
             iteration: self.iteration,
             objective: Some(self.objective),
+            gap: None,
             converged: self.converged,
         }
     }

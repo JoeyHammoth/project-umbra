@@ -64,6 +64,50 @@ pub struct Expected {
 /// `exposure_s` is the observation time, `fidelity` selects the physics, and
 /// `background_hz` is only used at L2 (L0 and L1 are background-free unless a
 /// non-zero rate is supplied, which the scenarios do for detector noise floors).
+/// `λ` and `∂λ/∂X` for a single ray at a given opacity.
+///
+/// The whole forward law lives here and [`expected`] calls it once per ray, so
+/// the model and its derivative cannot drift apart across call sites. A3's
+/// inversion needs exactly this scalar function — inverting counts along one ray
+/// is solving `λ(X) = y` — and writing it a second time in the solver would be
+/// the classic way to fit a model the data was not generated under.
+pub fn ray_lambda(
+    ray: &crate::system::RayCell,
+    x: f32,
+    flux: &FluxTable,
+    fidelity: Fidelity,
+    exposure_s: f32,
+    params: &ForwardParams,
+) -> (f32, f32) {
+    let exposure = exposure_s.max(0.0);
+    let k = ray.k_scale;
+    let x = x.max(0.0);
+    let background: f32 = match fidelity {
+        Fidelity::L2 => params.background_hz * exposure,
+        _ => 0.0,
+    };
+    match fidelity {
+        Fidelity::L0 => {
+            let transmission = (-x / params.l0_attenuation_gcm2).exp();
+            let value = exposure * k * params.l0_flux0 * transmission + background;
+            let derivative =
+                -exposure * k * params.l0_flux0 / params.l0_attenuation_gcm2 * transmission;
+            (value, derivative)
+        }
+        Fidelity::L1 | Fidelity::L2 => {
+            let e = e_min(x, params.a, params.b);
+            let cos = ray.zen.cos();
+            // Value and derivative in one interpolation. The slope comes from the
+            // interpolant itself, so the gradient differentiates the same model
+            // the value came from (see FluxTable::integral_and_slope).
+            let (phi, dphi_de) = flux.integral_and_slope(e, cos);
+            let value = exposure * k * phi + background;
+            let derivative = exposure * k * dphi_de * de_min_dx(x, params.a, params.b);
+            (value, derivative)
+        }
+    }
+}
+
 pub fn expected(
     system: &System,
     rho: &[f32],
@@ -73,40 +117,13 @@ pub fn expected(
     params: &ForwardParams,
 ) -> Expected {
     let opacity = system.opacity(rho);
-    let exposure = exposure_s.max(0.0);
     let mut lambda = Vec::with_capacity(opacity.len());
     let mut dlambda_dx = Vec::with_capacity(opacity.len());
 
-    let background: f32 = match fidelity {
-        Fidelity::L2 => params.background_hz * exposure,
-        _ => 0.0,
-    };
-
     for (ray, x) in system.rays.iter().zip(&opacity) {
-        let k = ray.k_scale;
-        let x = x.max(0.0);
-        match fidelity {
-            Fidelity::L0 => {
-                let transmission = (-x / params.l0_attenuation_gcm2).exp();
-                let value = exposure * k * params.l0_flux0 * transmission + background;
-                let derivative =
-                    -exposure * k * params.l0_flux0 / params.l0_attenuation_gcm2 * transmission;
-                lambda.push(value);
-                dlambda_dx.push(derivative);
-            }
-            Fidelity::L1 | Fidelity::L2 => {
-                let e = e_min(x, params.a, params.b);
-                let cos = ray.zen.cos();
-                // Value and derivative in one interpolation. The slope comes from
-                // the interpolant itself, so the gradient differentiates the same
-                // model the value came from (see FluxTable::integral_and_slope).
-                let (phi, dphi_de) = flux.integral_and_slope(e, cos);
-                let value = exposure * k * phi + background;
-                let derivative = exposure * k * dphi_de * de_min_dx(x, params.a, params.b);
-                lambda.push(value);
-                dlambda_dx.push(derivative);
-            }
-        }
+        let (value, derivative) = ray_lambda(ray, *x, flux, fidelity, exposure_s, params);
+        lambda.push(value);
+        dlambda_dx.push(derivative);
     }
 
     Expected {
