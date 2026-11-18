@@ -64,7 +64,11 @@ oracle parity tests compare against. Do not import it into the build.
    `THIRD-PARTY-NOTICES.md`, where its notice lives); and every file under
    `web/public/` is covered by a row of the spec's §8.4 asset inventory whose
    licence is one this repo may ship
-6. `npm install --no-audit --no-fund && npm run build` in `web/`
+6. `bash tools/check-assets.sh` — every versioned asset directory matches its
+   `manifest.json`: listed files exist at the recorded byte length and SHA-256,
+   nothing unlisted has appeared beside them, and a manifest that cannot be
+   parsed in full fails rather than silently checking nothing
+7. `npm install --no-audit --no-fund && npm run build` in `web/`
 
 Gates are not advisory: fix the cause, never the assertion.
 
