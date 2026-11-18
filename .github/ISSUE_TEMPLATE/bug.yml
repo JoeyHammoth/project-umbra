@@ -1,0 +1,60 @@
+name: Bug
+description: Something is wrong, and we know how to see it.
+title: "[bug] "
+labels: ["type:bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: The observed behaviour, including the exact numbers if it is a numeric bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should happen
+      description: The expected behaviour, with a reference (spec section, paper, oracle value) if one exists.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Commands, seed, scene URL or a minimal test that shows the fault.
+      value: |
+        ```bash
+        cargo test --workspace
+        ```
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - core
+        - physics
+        - forward
+        - recon
+        - stats
+        - infer
+        - design
+        - vis
+        - wasm
+        - web
+        - tooling
+        - docs
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, browser, rustc/node versions, and whether it reproduces natively.
+    validations:
+      required: false
