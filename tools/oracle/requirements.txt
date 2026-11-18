@@ -1,0 +1,5 @@
+# Reference oracle and table checks (spec §6). Installed into the gitignored
+# .venv at the repository root; CI does not need them, because the fixtures they
+# produce are committed and the parity test is Rust-only.
+numpy==2.5.5
+scipy==1.18.1
