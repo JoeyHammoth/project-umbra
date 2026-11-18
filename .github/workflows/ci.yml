@@ -54,6 +54,15 @@ jobs:
       - name: Manifests and fixture provenance
         run: bash tools/check-licensing.sh
 
+  assets:
+    name: Asset integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Versioned asset manifests
+        run: bash tools/check-assets.sh
+
   web:
     name: Web build
     runs-on: ubuntu-latest
