@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Browser front end for UMBRA, the muon-tomography observatory",
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
