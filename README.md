@@ -77,6 +77,13 @@ transport code. It is a validated approximation with documented error. Every
 scenario is schematic and labelled as such; every reconstruction is shown with an
 indication of how much to believe it.
 
+## Licence
+
+MIT — see [LICENSE](LICENSE). Third-party material vendored into the tree is
+listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md); the only entry today
+is the Random123 known-answer vector file used as RNG test data, which stays
+under its own BSD-3-Clause terms.
+
 ## References
 
 - Gaisser, *Cosmic Rays and Particle Physics*; Guan et al. (2015) for the

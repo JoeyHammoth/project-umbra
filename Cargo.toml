@@ -18,6 +18,7 @@ version = "0.1.0"
 edition = "2021"
 repository = "https://github.com/JoeyHammoth/project-umbra"
 authors = ["Joey Hammoth"]
+license = "MIT"
 
 [workspace.dependencies]
 umbra-core = { path = "crates/umbra-core" }
