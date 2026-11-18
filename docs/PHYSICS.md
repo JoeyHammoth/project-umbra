@@ -46,8 +46,26 @@ Modified Gaisser parametrisation with the Guan et al. (2015) large-angle
 correction, `E` in GeV:
 
 ```text
-I(E, θ) = 0.14 E^(−2.7) [ 1/(1 + 1.1 E cosθ*/115) + 0.054/(1 + 1.1 E cosθ*/850) ]
+I(E, θ) = 0.14 [ E (1 + 3.64 / (E cos^1.29 θ*)) ]^(−2.7)
+              × [ 1/(1 + 1.1 E cosθ*/115) + 0.054/(1 + 1.1 E cosθ*/850) ]
+
+cosθ* = sqrt(cos²θ + P1² + P2 cos^P3 θ + P4 cos^P5 θ) / sqrt(1 + P1² + P2 + P4)
+P1..P5 = 0.102573, −0.068287, 0.958633, 0.0407253, 0.817285
 ```
+
+The bracket **multiplies** the energy (Guan et al. 2015, Eq. 3). Dividing by it
+inverts the low-energy spectrum and raises the vertical flux by ~400×; the
+70 m⁻² s⁻¹ sr⁻¹ anchor below is a test precisely because that mistake is
+easy to make and produces a plausible-looking image rather than an error.
+
+Anchors the tests enforce:
+
+| Quantity | Value |
+|---|---|
+| Φ(>1 GeV, vertical) | 6.0 × 10⁻³ cm⁻² s⁻¹ sr⁻¹ ≈ 60 m⁻² s⁻¹ sr⁻¹ (literature ≈ 70) |
+| I(1 GeV, vertical) | 2.3 × 10⁻³ cm⁻² s⁻¹ sr⁻¹ GeV⁻¹ |
+| Transmission through 3.8 m of rock, above 1 GeV | ≈ 70% |
+| Transmission through ~75 m, above 1 GeV | ≈ 1% |
 
 `Φ(>E, θ)` is precomputed offline on a `(log10 E, cos θ)` grid and interpolated
 bilinearly in log space at runtime. Two coefficients and an effective-angle

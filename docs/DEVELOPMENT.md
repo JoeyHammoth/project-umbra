@@ -65,8 +65,36 @@ Gates are not advisory: fix the cause, never the assertion.
 ## Offline tooling
 
 The table generator, oracle parity runner and SBC dataset dumps are `umbra-cli`
-subcommands (M1 onwards). Their outputs are versioned assets checked into
+subcommands. Their outputs are versioned assets checked into
 `web/public/tables/<version>/`, never generated at build time.
+
+```bash
+cargo run -p umbra-cli -- gen-flux            # writes flux.bin + manifest.json
+cargo run -p umbra-cli -- selftest           # build a scene, evaluate L1, check the adjoint
+cargo run -p umbra-cli --release -- bench    # build + forward-model timings
+```
+
+The table format is fixed by spec §14.3 and carries a SHA-256 trailer; `gen-flux`
+prints the digest it wrote, and the manifest records it. If you change any
+physics constant, expect the digest to change — and say so in the PR, because
+that changes every count in the app.
+
+### Verifying the table against the reference quadrature
+
+The flux parametrisation is checked against an independent `scipy` quadrature,
+which lives outside the Rust build so it cannot share its mistakes:
+
+```bash
+python -m venv .venv
+.venv/Scripts/pip install numpy scipy      # .venv/bin/pip on Linux/macOS
+.venv/Scripts/python tools/oracle/check_flux.py
+```
+
+The script reimplements Guan et al. (2015) Eq. 3 independently, integrates it
+with `scipy.integrate.quad`, and compares against the committed asset. At the
+time of writing they agree to 0.08%, and both reproduce the ≈70 m⁻² s⁻¹ sr⁻¹
+vertical intensity above 1 GeV. If the comparison ever fails, the table is wrong
+or the citation is wrong — both are worth stopping for.
 
 ## Troubleshooting
 
