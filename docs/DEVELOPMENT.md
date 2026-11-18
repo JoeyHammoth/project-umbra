@@ -6,7 +6,7 @@
 |---|---|---|
 | Rust | stable (pinned by `rust-toolchain.toml`) | compute core |
 | `wasm32-unknown-unknown` target | — | building `umbra-wasm` |
-| Node.js | 20+ (22 LTS recommended) | front end |
+| Node.js | 20.19+ or 22.12+ (22 LTS used in CI) | front end — Vite 8's `engines` floor |
 | `wasm-bindgen-cli` | matches the crate version | local `.wasm` bundles |
 | Python | 3.10+ | reference oracle and table generation |
 
@@ -58,7 +58,7 @@ oracle parity tests compare against. Do not import it into the build.
 2. `cargo clippy --workspace --all-targets -- -D warnings`
 3. `cargo test --workspace`
 4. `cargo build -p umbra-wasm --target wasm32-unknown-unknown`
-5. `npm ci && npm run build` in `web/`
+5. `npm install --no-audit --no-fund && npm run build` in `web/`
 
 Gates are not advisory: fix the cause, never the assertion.
 

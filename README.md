@@ -44,8 +44,10 @@ cargo run -p umbra-cli
 cd web && npm install && npm run dev
 ```
 
-The design specification, including all the equations and the algorithm
-portfolio, lives at [source/UMBRA_DESIGN_SPEC.md](source/UMBRA_DESIGN_SPEC.md).
+The design specification, including all the equations, the algorithm portfolio,
+the offline-tooling and testing strategy, the risk register and the appendices,
+lives at [source/UMBRA_DESIGN_SPEC.md](source/UMBRA_DESIGN_SPEC.md) (v0.2,
+complete through §14).
 The original CT lab that seeded the ray-integral picture is preserved unmodified
 in [source/ctlab](source/ctlab).
 

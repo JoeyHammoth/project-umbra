@@ -1,6 +1,6 @@
 # UMBRA — An Interactive Muon-Tomography Observatory
 
-**Design & Implementation Specification** · v0.1 (draft) · 18 November 2026
+**Design & Implementation Specification** · v0.2 (draft) · 18 November 2026
 **Deliverable:** a static, serverless web application (Rust → WebAssembly compute core, TypeScript/WebGPU front end) hosted on GitHub Pages and/or Cloudflare Pages.
 
 > *Codename "Umbra": the shadow that stone casts in the cosmic-ray sky. The app lets a visitor build a pyramid, hide a chamber in it, place particle detectors, watch muons rain down, and then do real inverse-problem science to decide whether the hidden void can be found, how confident one can be, and where to put the next detector.*
@@ -23,6 +23,11 @@
 12. [Risk register](#12-risk-register)
 13. [Repository layout, documentation and portfolio presentation](#13-repository-layout-documentation-and-portfolio-presentation)
 14. [Appendices](#14-appendices)
+
+> **Status of this document.** v0.2 writes the sections v0.1 listed but never
+> drafted (§6–§14), so every heading in this contents list now has a body. §11 is
+> the roadmap of record; where the text and the code disagree, the code wins and
+> the drift is either fixed here or recorded as an ADR. §14.7 is the changelog.
 
 ---
 
@@ -550,4 +555,760 @@ For each sampled muon draw $\cos\theta$ and $E$ from $I(E,\theta)$ (inverse-CDF 
 - Preallocated workspaces; no allocation in inner loops.
 - Release profile: `opt-level=3`, `lto="fat"`, `codegen-units=1`, `panic="abort"`, followed by `wasm-opt -O3`.
 - `criterion` benchmarks for each kernel, tracked in CI with regression thresholds.
+
+---
+
+## 6. Offline tooling and the Python reference oracle
+
+### 6.1 Where the boundary sits
+
+| Concern | Runs | Ships to the browser | Why it is not in the browser |
+|---|---|---|---|
+| Flux and range tables | `umbra-cli` | yes, as a versioned asset (§6.2) | quadrature over a GeV–TeV grid is an audit performed once, not a page-load cost |
+| Independent opacity oracle | Python (`tools/oracle`) | no | independence: an oracle written in Rust cannot catch a shared sign error in the Rust core |
+| SBI training and ONNX export | Python + PyTorch | only the model, ≤ 1.5 MB | hours of CPU; PyTorch in the bundle would dwarf every other asset |
+| Benchmarks, coverage, size audit | `criterion`, `cargo-llvm-cov` | no | native wall-clock baselines without wasm or JIT noise |
+
+The rule: **anything that must be auditable once is offline; anything that must be fast every time is in the core.**
+
+### 6.2 Table generation
+
+```mermaid
+flowchart LR
+  C["constants (§2.3)"] --> Q["quadrature"]
+  Q --> G["(log10 E, cos θ) grid"]
+  G --> V{"validate against published curves"}
+  V -- "inside tolerance" --> W["write .ubt + manifest.json"]
+  V -- "outside tolerance" --> X["fail the build"]
+  W --> H["record sha256"]
+```
+
+```bash
+cargo run -p umbra-cli -- gen-tables --out web/public/tables/v1
+cargo run -p umbra-cli -- gen-tables --check      # regenerate, compare hashes, exit 1 on drift
+cargo run -p umbra-cli -- gen-range  --source csda --out web/public/tables/v1
+```
+
+| Property | Value |
+|---|---|
+| Energy axis | log₁₀ E ∈ [−1, 4] GeV, 129 nodes (0.0391 dex) |
+| Angle axis | cos θ ∈ [0, 1], 33 nodes |
+| Stored arrays | Φ(>E, θ) and I(E, θ), both `f32` little-endian (format in §14.3) |
+| Size | 129 × 33 × 4 B × 2 ≈ 34 KB raw, ≈ 10 KB gzipped |
+| Interpolation | bilinear in log E; clamps at both axes |
+| Derivative | not differentiated numerically — `∂Φ/∂E = −I` holds by construction from §2.3; a test asserts the stored pair agrees with a central difference to 1e-3 relative |
+
+**Validation acceptance.** Relative deviation of Φ(>E, θ) against hand-digitised points from the published curves, committed as fixtures with their citation:
+
+| Range | Tolerance | Dominant error |
+|---|---|---|
+| 1–10³ GeV | ≤ 2% | digitisation of the source figure |
+| 10³–10⁴ GeV | ≤ 5% | digitisation, and the large-angle correction's own fit quality |
+
+The tolerance reflects digitisation, not physics. `docs/PHYSICS.md` records that sentence verbatim next to the table, so nobody mistakes 2% for a theory precision.
+
+**Alternative source.** `--source gmds` builds the range table from tabulated Groom–Mokhov–Striganov stopping power instead of the analytic CSDA formula, selected at runtime by `Physics::Tabulated`. The two must agree within 3% over the range used by the scenarios, or the build fails; a disagreement is information about the CSDA approximation, not a bug to be silenced.
+
+### 6.3 The Python reference oracle
+
+The core claim of the whole physics stack is that voxel traversal reproduces an analytic chord. That claim is tested against an implementation that shares no code with the one under test.
+
+```text
+tools/oracle/
+  umbra_oracle/
+    shapes.py     # box, prism, ellipsoid, capsule: ray-primitive intersection
+    rays.py       # ray construction from detector pose + angular bin (§5.2)
+    fixtures.py   # emit parity fixtures
+  requirements.txt  # numpy, scipy, pinned
+```
+
+- **Semantics come from the lab, code does not.** `source/ctlab/python/projection.py` computes projected attenuation analytically (`AttenuationObject.project_attenuation`) and the lab validates it with `scipy.integrate.quad`. The oracle keeps exactly that meaning and replaces the nested Python loops with vectorised intersections plus quadrature, so it can produce thousands of rays quickly. `source/ctlab` is never imported and never modified (§13.1); it is the citation for the picture.
+- **Parity contract.** The oracle emits JSON fixtures into `crates/umbra-forward/tests/fixtures/oracle/`:
+
+```json
+{
+  "schema": "umbra.oracle/1",
+  "primitive": { "kind": "ellip", "c": [0, 0, 0], "semi": [2.0, 1.5, 1.0], "rot": [0, 0, 0, 1] },
+  "rho": 2.65,
+  "rays": [ { "o": [0, 0, -10], "d": [0, 0, 1] } ],
+  "expected_opacity": [ 12.345 ],
+  "quad_eps": 1e-10,
+  "tolerance": 1e-4
+}
+```
+
+  The Rust test `oracle_parity.rs` builds a `System` at voxel size `h`, applies `L` to a uniform density, and compares.
+
+| Case | Tolerance | Rationale |
+|---|---|---|
+| Closed-form chord vs quadrature | 1e-4 relative | both exact; the gap is quadrature error and `f32` |
+| DDA traversal vs analytic, box, axis-aligned | 1e-6 | traversal is exact here; this is the test that must never be relaxed |
+| DDA traversal vs analytic, rotated box and prism | 1e-5 | only boundary voxels contribute error |
+| DDA traversal vs analytic, ellipsoid at `h` = 0.5 cm | 5e-3 | chord approximation of a curved boundary |
+| Convergence | error halves when `h` halves | a measured assertion, not an assumption: the test records the ratio and fails if it is not ≈ 1 |
+
+- **What the oracle deliberately does not cover.** Statistics (a second implementation of the scan would only duplicate the same modelling choices — calibration is the honest check, §10.3), and solvers (checked by objective monotonicity, known-solution recovery and parity on the *forward* operator, which is the only shared ground truth).
+- **Regeneration.** `python -m umbra_oracle fixtures --out crates/umbra-forward/tests/fixtures/oracle --seed 7`. Fixtures are committed: they are small, reviewable, and a change to them is visible in the diff.
+
+### 6.4 SBI datasets and ONNX export (A13)
+
+```bash
+cargo run -p umbra-cli -- dump-sbi --scenes 20000 --level L1 --out data/sbi/v1 --seed 42
+python tools/sbi/train.py --data data/sbi/v1 --export web/public/models/npe-v1.onnx
+```
+
+- Dataset per scene: `θ` (8 parameters, §5.7), `y` (counts per ray cell), and metadata (scene id, seed, exposure, fidelity level). Stored as compressed `.npz` shards with a `manifest.json` carrying the generator's git SHA — a model is only as reproducible as the data it saw.
+- Export contract: ONNX opset 17, float32, input `(N, n_rays)`, output flow parameters or `(N, 8)` posterior samples; file ≤ 1.5 MB; loaded lazily by an ONNX worker only when the user opts in.
+- **Gate before shipping:** SBC rank histograms per parameter must be uniform (KS p > 0.01 at 10⁴ draws), and the model must be shown *next to* A7 rather than instead of it. A learned posterior that is faster but mis-calibrated is not a feature; it is a liability, and the Methods page says so.
+
+### 6.5 Benchmarks and baselines
+
+| Kernel | Target (native, 1 thread) | Used by |
+|---|---|---|
+| CSR matvec, 10⁶ nnz | ≤ 3 ms | A1–A5, A6, A9, A10 |
+| `EXPECTED` at L1, 4 k rays | ≤ 1 ms | every simulator path |
+| Scan correlation, 10⁶ candidates, 2-D | ≤ 50 ms | A6 |
+| One PDHG iteration, 2-D | ≤ 3 ms | A3 |
+| One MCMC likelihood, 10⁴ rays | ≤ 0.5 ms | A7 |
+| Event MC, 65 k muons | ≤ 250 ms | A12 |
+
+`criterion` runs natively; `bench/baseline.json` records the values. The wasm/native ratio per kernel is measured once per milestone and must stay ≤ 2×, otherwise the kernel is the problem, not the browser. From M6 a 10% regression fails CI; before that it is advisory, because thresholds set before the code exists are guesses.
+
+### 6.6 Determinism of offline outputs
+
+- Tables and models are **immutable, versioned assets** with a SHA-256 in `manifest.json` (§8.5). `gen-tables --check` runs in CI from M1: drift means either a physics change that must be reviewed or an unreproducible toolchain, and both are worth failing a build over.
+- Regeneration is byte-identical on the documented toolchain (versions recorded in the manifest). If a libm or quadrature difference ever appears, the response is a **new table version**, never a silent change to the numbers under an old version.
+
+### 6.7 Explicitly not offline
+
+No server-side compute, no runtime training, no telemetry, no third-party script at runtime. The only network fetches are the versioned assets of the deployment itself.
+
+---
+
+## 7. Front-end design
+
+### 7.1 Routes and information architecture
+
+| Route | Purpose | First paint | Loaded |
+|---|---|---|---|
+| `/` | The 30-second story, ending in one live mini-observatory | eager | shell + a 2-D scene |
+| `/observatory` | Build, place detectors, scrub exposure, reconstruct | eager shell | wasm chunk, 3-D chunk on demand |
+| `/lab` | Solver race, calibration plots, SBC, benchmarks | shell | plots chunk |
+| `/detect` | Significance map, timeline, characterise | shell | plots chunk |
+| `/design` | Utility map, greedy versus manual placement | shell | plots chunk |
+| `/learn` | Chapters that build the physics from scratch | eager text | images only |
+| `/methods` | Derivations, documented approximations, limitations | eager text | KaTeX chunk |
+| `/mystery` | Seeded hidden-chamber game | shell | game chunk |
+
+Routing is hash-based so a static host needs no rewrite rules. `vite.config.ts` sets `base: '/project-umbra/'` for GitHub Pages and reads `UMBRA_BASE` for other hosts (§9.5).
+
+### 7.2 Visual language
+
+- **Instrument, not poster.** Dark default with a light option; one accent; chrome recedes. Every effect has to carry data (§1.6.1).
+- **Colour is a quantity, never decoration.** Density: viridis-like ramp. Signed deviation: diverging red–blue. Uncertainty: a single hue, so it never reads as density. Series in plots: Okabe–Ito, colour-blind safe.
+- **Numerals are tabular** in every readout, so scrubbing does not make digits jump.
+- Type scale 1.25, 8 pt spacing, tokens as CSS custom properties consumed by Tailwind v4 — no ad-hoc pixel values in components.
+- Motion ≤ 200 ms ease-out, and only for state change. Progress bars animate **real** task fractions; a fake indeterminate shimmer on a 4 s solve is a lie about what the machine is doing. `prefers-reduced-motion` removes rain, auto-rotation and transitions.
+
+### 7.3 State
+
+| Slice | Owns | Never owns |
+|---|---|---|
+| `scene` | `SceneSpec` snapshot, undo/redo stack | derived numerics |
+| `detectors` | poses, binning, efficiency edits (producing a new snapshot) | built system matrices |
+| `physics` | fidelity level, constants overrides, nuisance toggles | tables (those are assets) |
+| `exposure` | `t`, playback state | counts |
+| `tasks` | task ids, status, results, errors | science |
+| `ui` | tab, panel, focus, quality level | domain data |
+| `game` | mystery seed, attempts, hints | scene internals |
+
+`SceneSpec` is immutable: an edit produces a new snapshot and a new content key, which is what makes caching and URL sharing correct by construction. Components read through selectors; no component computes a forward model, and no component holds a `Float32Array` longer than it takes to hand it to the renderer.
+
+### 7.4 `ComputeBus`
+
+```ts
+const handle = bus.submit({
+  kind: 'RECON',
+  payload: { algo: 'A2', sceneKey, seed: 7, params },
+  priority: 0,            // 0 interactive · 1 normal · 2 background
+});
+handle.on('progress', f => setProgress(f.frac));
+const res = await handle.result();   // { ok: true, ... } | { ok: false, code, message }
+bus.cancel(handle.id);
+```
+
+| Property | Behaviour |
+|---|---|
+| Key | `hash(canonical payload, asset versions, api_version)` — canonical means sorted keys and quantised floats, so 0.1 + 0.2 and 0.3 do not produce two cache entries |
+| Dedupe | identical in-flight keys share one worker task and one result |
+| Memoise | memory for everything; IndexedDB for `LEE_CALIB`, `MCMC`, `EVENT_MC` |
+| Priority | a worker takes the highest-priority queued task; `2` only runs when nothing else is queued |
+| Cancel | `AbortSignal` → wasm token checked every ≤ 5 ms of inner-loop work (§4.5) |
+| Progress | coalesced onto `requestAnimationFrame`; snapshots transferred |
+| Errors | the discriminated union of §4.6, surfaced as typed UI states, never a raw stack trace |
+
+### 7.5 Worker pool and module loading
+
+- `N = clamp(hardwareConcurrency − 1, 1, 4)`; one wasm instance per worker; `Comlink` for RPC.
+- Arrays over 1 MB are **transferred**; smaller ones are copied, because detaching a buffer the caller still holds is a worse bug than a copy.
+- Memory: growth on demand, and the 96³ mode is offered only when `navigator.deviceMemory ≥ 8`; otherwise the UI offers 64³ and says why.
+- Two wasm builds (scalar, `simd128`) chosen by `wasm-feature-detect`. `api_version()` is asserted at boot; a stale cached module produces a hard error and a reload prompt rather than a silent mismatch.
+- The `rayon` "turbo" build appears only when `crossOriginIsolated` is true (§4.4); GitHub Pages does not set COOP/COEP, so in the default deployment it is simply absent — not broken, absent.
+
+### 7.6 Rendering
+
+| Surface | Technology | Notes |
+|---|---|---|
+| Scene (stone, detectors, void) | Three.js `WebGPURenderer`, WebGL2 fallback | capability probed once at boot; no mid-session switching |
+| Volume | raymarch fragment shader, preintegrated transfer function, RGBA16F 3-D texture | 256 steps default, adaptive; density in RGB, uncertainty in A |
+| Muon rain | instanced line segments from A12's packed arrays | zero allocation per frame |
+| Heatmaps | 2-D canvas | one draw per result, not per interaction |
+| Corner plots | WebGL scatter matrix | decimated to 5 k points for display, statistics on the full set |
+| Time series | uPlot | exposure, significance, stopping time |
+
+Every visual has a textual twin: a summary sentence and a data table, so the result is available without seeing the picture. This is not a compliance afterthought — the numbers are the product, the picture is the explanation.
+
+### 7.7 Budgets and enforcement
+
+| Budget | Target | Enforced from |
+|---|---|---|
+| Landing route JS | ≤ 250 KB gzip | M5 (size check on the build manifest) |
+| wasm core | ≤ 700 KB gzip | M5 |
+| ONNX models | ≤ 1.5 MB, lazy | M5 |
+| LCP (cold, mid laptop) | ≤ 3 s hero, ≤ 6 s interactive Observatory | M6 |
+| Interaction | ≤ 100 ms 2-D, ≤ 400 ms 3-D | M5 |
+| Lighthouse a11y | ≥ 95 | M5 |
+
+Adaptive quality ladder: pixel ratio 2 → 1.5 → 1; raymarch 256 → 128 → 64 steps; voxel 96³ → 64³ → 48³; rain count 100% → 25% → off. Each step is visible in a small "quality" readout, because silent degradation looks like a bug.
+
+### 7.8 Accessibility
+
+- Keyboard-complete: every control reachable, visible focus ring, skip links, roving tabindex inside matrices and detector lists (§14.4).
+- `aria-live="polite"` announces compute progress ("reconstruction 42 percent") and completion with the actual result, not just "done".
+- Never colour alone: significance uses colour **and** a glyph; density uses colour **and** the numeric readout on hover/focus.
+- 200% zoom reflow, no horizontal scrolling at 320 px, contrast ≥ 4.5:1 for text.
+- Reduced motion honoured everywhere, including the muon rain.
+
+### 7.9 PWA and offline
+
+Precache the shell, tables v1 and fonts. Hashed assets are cache-first immutable; the shell is stale-while-revalidate. wasm is cached keyed by `api_version` + content hash and old entries are dropped on activation, so a new deployment never pairs new JS with old wasm. A new version shows an update prompt; it never swaps under a running task. Result: every route works offline after one visit, and Mystery mode works with the network off entirely.
+
+### 7.10 Empty, loading and error states
+
+| State | Copy rule | Example |
+|---|---|---|
+| Empty | say what is missing and what to do | "No detectors yet — drag one onto the north face to start collecting." |
+| Loading | any wait over 400 ms carries a label and a real fraction | "Building the operator — 1.2 M path lengths" |
+| Degraded | name the lost capability and the consequence | "WebGL2 only: volume rendering at reduced step count." |
+| Error | the code, one sentence of cause, one action | "TABLES_MISSING — the flux table did not load. Retry." |
+
+### 7.11 Web code conventions
+
+- TypeScript strict, including `noUncheckedIndexedAccess`; `any` is not permitted in `web/src` (the one exception is a narrow boundary cast that must carry a comment).
+- Protocol types come from `web/src/compute/protocol.ts`, transcribed from §4.6; they are the only place task kinds and payloads are named.
+- Layout: `web/src/{app,components,compute,state,render,scenes,styles}`. Numerics never live outside `compute/`; components never import from `compute/` except through `state/`.
+- One component per file, named export, no default exports.
+
+---
+
+## 8. Data, assets and scenario specification
+
+### 8.1 `SceneSpec` v1
+
+```json
+{
+  "schema": "umbra.scene/1",
+  "id": "khufu-schematic",
+  "label": "Khufu — schematic section",
+  "schematic": true,
+  "units": { "length": "m", "density": "g/cm3" },
+  "primitives": [
+    { "kind": "box", "c": [0, 0, 0], "half": [115, 70, 115], "rot": [0, 0, 0, 1], "rho": 2.2 }
+  ],
+  "voids": [
+    { "kind": "capsule", "a": [0, 20, 0], "b": [40, 20, 0], "r": 3.0 }
+  ],
+  "detectors": [
+    { "pose": { "p": [0, 2, -118], "n": [0, 0, 1] }, "area_m2": 0.25, "eff": 0.9,
+      "bins": { "az": 24, "zen": 12, "az_range": [-45, 45], "zen_range": [0, 60] },
+      "sigma_ang_mrad": 10, "bg_rate_hz": 0.05 }
+  ],
+  "physics": { "level": "L1", "a": 2.0e-3, "b": 4.0e-6, "rho_bulk": 2.65, "x0": 26.5 },
+  "exposure_s": 2592000,
+  "grid": { "n": [128, 128], "h_m": 0.5, "origin_m": [-64, -64] },
+  "seed": 7,
+  "notes": "Dimensions rounded; see §8.3."
+}
+```
+
+Rules: `schema` is mandatory and versioned; unknown keys are rejected by the loader (silently ignoring a scene field is how two people get different physics from the same file); every scenario is a plain JSON file in `web/src/scenes/` so it can be diffed and reviewed.
+
+### 8.2 Built-in scenarios
+
+| id | Geometry | What it stresses | Exercises |
+|---|---|---|---|
+| `empty-stone` | uniform block, no voids | null calibration, background-only behaviour | A6, A8, A11 |
+| `khufu-schematic` | stepped pyramid, one upper chamber | realistic transmission regime, small signal | A2, A4, A6 |
+| `north-corridor` | capsule corridor near a face | thin, elongated anomaly; limited-angle ambiguity | A4, A7, A10 |
+| `step-pyramid` | three tiers, layered density | nuisance profiling (bulk density) | A6 nuisances |
+| `twin-void` | two chambers of different size | multi-scale template bank, LEE | A6, A9 |
+| `dense-inclusion` | granite block inside rubble | the sign flip in A4 (`δ ≥ 0`) | A4 |
+| `calibration-phantom` | analytic shapes with known chords | parity and resolution, not discovery | oracle, A10 |
+| `mystery-<seed>` | hidden chamber, unknown pose | play, posterior vs truth | A7, A9 |
+
+### 8.3 Schematic honesty (binding)
+
+Every monument scenario is **schematic**: dimensions rounded to a few significant figures, geometry simplified to primitives, no survey data. The rules:
+
+1. A scenario that references a real structure carries `"schematic": true` and displays a persistent "schematic" badge on its card and in the exported image.
+2. Copy says "modelled on" or "inspired by", never "a scan of". Morishima et al. (2017) and Procureur et al. (2023) are cited as inspiration and evidence that the method works, not as sources of geometry.
+3. The Methods page repeats the disclaimer next to the forward model, where a reader who skipped the landing page will still see it.
+4. No scenario may be presented as a prediction about a real monument. The README says this too (§13.6).
+
+### 8.4 Asset inventory
+
+| Asset | Path | Size | Licence | Loader |
+|---|---|---|---|---|
+| Flux + range tables v1 | `web/public/tables/v1/` | ≈ 40 KB | generated from cited sources | `LOAD_TABLES`, verified by manifest |
+| NPE model (optional) | `web/public/models/` | ≤ 1.5 MB | trained in-repo | ONNX worker, opt-in |
+| Typeface | bundled subset | ≤ 40 KB | SIL OFL | CSS |
+| Icons | inline SVG | ≤ 10 KB | CC0 | components |
+| Scenes | `web/src/scenes/*.json` | < 5 KB each | repo licence | bundled at build |
+
+No photogrammetry, no decorative textures, no remote fonts. A texture that is not a data volume does not belong in this app.
+
+### 8.5 Asset versioning and manifest
+
+```text
+web/public/tables/v1/
+  flux.ubt
+  range.ubt
+  manifest.json
+```
+
+```json
+{
+  "schema": "umbra.assets/1",
+  "asset": "tables", "version": 1,
+  "generated_by": { "git_sha": "…", "cli": "umbra-cli 0.1.0", "rustc": "1.100.0" },
+  "files": [ { "path": "flux.ubt", "bytes": 34056, "sha256": "…" } ],
+  "citation": "Gaisser; Guan et al. (2015); Groom, Mokhov & Striganov (2001)"
+}
+```
+
+Rules: a published version directory is **immutable**; a breaking change creates `v2` and bumps `TABLES_VERSION` in the same PR; the loader checks schema and byte length always, and verifies the hash in development and on first load per version (hashing 40 KB is cheap; hashing 1.5 MB on a phone is not worth the battery).
+
+### 8.6 URL codec
+
+The whole state of a session fits in the fragment:
+
+| Field | Description |
+|---|---|
+| `v` | codec version |
+| `s` | scene id or inline parameters |
+| `d` | detector poses and binning |
+| `p` | fidelity level and constants overrides |
+| `t` | exposure seconds |
+| `r` | RNG seed |
+| `u` | active tab and panel |
+| `c` | chart state (scale, selection) |
+
+`JSON → deflate-raw → base64url`, capped at 2 KB (over the cap, the app drops chart state first, then UI state, and says it did). The hash fragment is never sent to a host, so links are shareable and private by construction. Unknown keys are ignored with a warning rather than failing the load; an unknown `v` is **not** reinterpreted — the user is told the link came from a newer version and given the closest scene.
+
+---
+
+## 9. Build, CI/CD, hosting and deployment
+
+### 9.1 Build pipeline
+
+```mermaid
+flowchart LR
+  R["cargo build --release\n(2 wasm variants)"] --> B["wasm-bindgen\n(version pinned to Cargo.lock)"]
+  B --> O["wasm-opt -O3"]
+  O --> C["copy into web/src/wasm/"]
+  T["tables v1 (committed)"] --> V["vite build"]
+  C --> V
+  V --> D["dist/"]
+  D --> P["GitHub Pages artifact"]
+  D --> F["Cloudflare Pages (optional)"]
+```
+
+Two wasm binaries are built (`simd128` and scalar) and selected at runtime (§4.4). The wasm is **not** committed: it is a build product, regenerated from a locked toolchain, which also keeps the repository reviewable.
+
+### 9.2 Local development
+
+| Task | Command |
+|---|---|
+| Rust tests | `cargo test --workspace` |
+| Rust gates as CI runs them | `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings` |
+| wasm bundle | `cargo build -p umbra-wasm --target wasm32-unknown-unknown --release` |
+| Front end | `cd web && npm install && npm run dev` |
+| Typecheck + build | `cd web && npm run build` |
+| Tables | `cargo run -p umbra-cli -- gen-tables --out web/public/tables/v1` |
+
+Until the façade lands (M5), UI work uses a **protocol-compatible mock** in `compute/`: same task kinds, same result shapes, canned numbers. That mock is what lets the interface and the science proceed in parallel without either blocking the other, and it is deleted the day the real façade is wired — not left as a second code path.
+
+### 9.3 Gates
+
+| Job | Steps | Blocking | Typical |
+|---|---|---|---|
+| Rust gates | `fmt --check` → `clippy -D warnings` → `test --workspace` → wasm release build | yes | ~2–4 min warm |
+| Web build | `npm install --no-audit --no-fund` → `npm run build` (`tsc --noEmit && vite build`) | yes | ~40 s |
+| Sizes (M5) | bundle + wasm gzip budgets (§7.7) | yes | ~5 s |
+| Parity (M1) | oracle fixtures | yes | ~10 s |
+| Coverage (M2) | `cargo-llvm-cov`, ≥ 85% numerics | advisory → blocking at M6 | ~5 min |
+| Calibration (M3) | 10⁴ null datasets, seeded | nightly, blocking on the milestone | ~20 min |
+| Benchmarks (M6) | `criterion` vs `bench/baseline.json`, 10% | yes | ~10 min |
+
+Gates are not advisory, and a failing gate is fixed by changing the cause. Two exceptions are stated openly rather than hidden: coverage and calibration are advisory until the milestone that owns them, because a threshold invented before the code exists measures nothing.
+
+### 9.4 Caching
+
+`Swatinem/rust-cache` keyed on the toolchain and `Cargo.lock`; npm cache keyed on `web/package-lock.json`; Node 22 (Vite 8 requires ≥ 20.19 or ≥ 22.12); `wasm-bindgen-cli` pinned to the exact version in `Cargo.lock` (a mismatch produces a runtime error that reads like a physics bug, so it is pinned, not floated).
+
+### 9.5 Hosting
+
+| Host | Base path | Notes |
+|---|---|---|
+| GitHub Pages (primary) | `/project-umbra/` | workflow-built artifact; no COOP/COEP, so task-parallel only |
+| Cloudflare Pages (secondary) | `/` via `UMBRA_BASE=/` | same artifact, preview deploys optional |
+
+Hashed assets: `Cache-Control: public, max-age=31536000, immutable`. `index.html`: `no-cache`. SPA fallback to `index.html` for unknown paths. No server, no functions, no database — which is also why rollback is trivially safe (§9.8).
+
+### 9.6 Releases
+
+`main` is always deployable; a tag `v0.x.y` records a released state. Release notes are generated from conventional-commit PR titles, and each release lists the asset versions it ships (tables v1, model v1) because those change physics without changing code. From M6 the Pages artifact carries a build provenance attestation.
+
+### 9.7 Permissions, secrets and dependencies
+
+- Workflow default `permissions: contents: read`; only the deploy job adds `pages: write` and `id-token: write`, and only on `main`.
+- No personal access tokens in CI. Nothing in the build needs a secret; if that ever changes, the feature is wrong for a £0 static deployment.
+- Dependabot: patch and minor updates grouped per ecosystem, majors separate, and **peer-coupled upgrades must be proposed as one PR**. This is not hypothetical: `vite` 6 → 8 and `@vitejs/plugin-react` 4 → 6 each failed `npm install` on their own (each peers the other's new major), and only landed together. A dependency PR that cannot pass alone is a signal that the upgrade is a pair, not that CI needs relaxing.
+
+### 9.8 Rollback
+
+Revert the merge commit and let the workflow redeploy, or redeploy the previous tag. There is no data to migrate and no server to desynchronise, so every rollback is a two-way door — the reason this architecture was chosen over anything with a backend.
+
+### 9.9 Cost
+
+| Item | Cost |
+|---|---|
+| GitHub Pages hosting (public repo) | £0 |
+| GitHub Actions (public repo minutes) | £0 |
+| Cloudflare Pages free tier (optional) | £0 |
+| Custom domain (optional) | the only thing that could ever cost money |
+
+---
+
+## 10. Testing, validation and benchmarking
+
+### 10.1 Layers
+
+| Layer | What it proves | Where | Blocking |
+|---|---|---|---|
+| Unit | a function does what its name says | in-crate `#[cfg(test)]` | yes |
+| Property (`proptest`) | adjoint identity, symmetry, bounds hold for random inputs | `crates/*/tests/props.rs` | yes |
+| Parity / oracle | traversal equals an independent analytic chord (§6.3) | `umbra-forward/tests` | yes |
+| Golden | a scene, a seed and an exposure produce a known count hash | `crates/*/tests/golden` | yes |
+| Calibration | the statistics mean what they claim (§10.3) | `umbra-stats`, nightly | from M3 |
+| E2E smoke | the built app loads, runs one reconstruction, shows a number | Playwright, M5 | from M5 |
+| Accessibility | keyboard path, axe, Lighthouse ≥ 95 | CI + manual checklist | from M5 |
+
+### 10.2 Oracles and tolerances
+
+| Check | Tolerance |
+|---|---|
+| `⟨Ax, y⟩ = ⟨x, Aᵀy⟩` for every operator | 1e-6 relative |
+| Analytic chord vs `scipy` quadrature | 1e-4 |
+| DDA vs analytic chord (box / prism / ellipsoid) | §6.3 table, including the measured convergence ratio |
+| `E_min(0) = 0`, `E_min(1000) ≈ 2.004 GeV`, `dE_min/dX` vs central difference | 1e-3 relative |
+| Table interpolation vs direct quadrature | 2e-3 |
+| Flux vs published curves | 2% / 5% (§6.2) |
+| Event MC counts vs `λ_i` per bin | χ² p > 0.01 at 65 k tracks |
+
+### 10.3 Statistical validation protocol
+
+This is the section that decides whether the app is science or decoration.
+
+| Claim | Test | Pass criterion |
+|---|---|---|
+| Global false-positive rate at 3σ | 10⁴ H0 datasets through the full scan + LEE | empirical α within ±20% of nominal (1.35 × 10⁻³) |
+| Local p-values | same datasets, single candidate | within ±10% of nominal over a decade around 3σ |
+| Posterior calibration (A7) | SBC rank histograms, 10³–10⁴ draws per parameter | uniform, KS p > 0.01 |
+| Credible intervals | coverage over simulated truths | 68% and 95% intervals within 3σ binomial band |
+| `t₅σ` forecast (A8) | Monte Carlo stopping times | median within 15% of forecast |
+| LEE extrapolation | Euler-characteristic vs 5 000 brute-force nulls | global p within 20% at 3σ |
+| Nuisance profiling | significance with/without systematics on injected voids | monotone degradation, no numerical collapse |
+
+Changing any threshold is a PR that includes the calibration run that justifies it. The calibration report (plots + numbers + seeds) is published as a CI artifact and linked from `/methods`.
+
+### 10.4 Fixtures
+
+Committed and reviewed: oracle JSON (§6.3), scene specs (§8.2), golden count hashes, calibration seeds. Regeneration commands are in `docs/DEVELOPMENT.md`; the fixtures are small enough (< 200 KB total) that determinism and reviewability beat generating them at test time. A fixture change in a diff is a physics change and is reviewed as one.
+
+### 10.5 Budgets and benchmarks
+
+Kernel targets in §6.5; UI budgets in §7.7. Two rules: a number in a table needs a command that produces it, and a threshold that no test enforces is documentation, not a gate.
+
+### 10.6 Determinism
+
+| Test | Assertion |
+|---|---|
+| Same URL, two loads | identical scene hash, identical count hash |
+| 1 worker vs 4 workers | identical results for the same seed (stream-per-task, §4.7) |
+| Resume from IndexedDB | identical results as a cold run |
+| Scrubbing | counts never decrease as `t` grows; scrubbing back reproduces history |
+| Cancellation | a cancelled task leaves no partial result in the cache |
+
+### 10.7 CI wiring and flake policy
+
+Flakes are not retried into silence. A flaky test is quarantined with an issue, an owner and a deadline, and it does not sit in `main` pretending to be a gate. Statistical tests use fixed seeds, so a failure is reproducible locally by construction.
+
+### 10.8 Manual QA checklist (before a release)
+
+1. Reconstruct the default scene at L0, L1, L2 and confirm the void appears where the scene says it is.
+2. Tab through every control on `/observatory` without a mouse.
+3. Force WebGL2 (disable WebGPU) and confirm the degraded banner and usable frame rate.
+4. Reload offline and confirm the app starts and Mystery works.
+5. 320 px viewport: no horizontal scroll, controls reachable.
+6. Reduced motion: no rain, no auto-rotation.
+7. Screen reader: one complete pass over a result card, hearing the numbers.
+
+### 10.9 Coverage
+
+≥ 85% line coverage on the numeric crates (`core`, `physics`, `forward`, `recon`, `stats`, `infer`, `design`, `vis`), excluding the `wasm` façade and `cli` wiring, reported by `cargo-llvm-cov`. Coverage is a floor, not a goal: parity and calibration are the checks that would actually catch a wrong result.
+
+---
+
+## 11. Implementation roadmap
+
+### 11.1 Milestones
+
+| # | Milestone | Deliverable | Exit criteria | Status |
+|---|---|---|---|---|
+| M0 | Foundation | workspace, gates, docs, board, wiki | builds green on `main`; every crate exists with its types | **done** |
+| M1 | Physics core and forward model | tables, 2-D DDA, L0/L1 with exact gradients, Poisson simulator | traversal matches analytic chords; MC agrees with `λ` by χ² | next |
+| M2 | Reconstruction portfolio | A1–A4 on identical data, Fisher error bars | each solver has a convergence test, benchmark and a result on the default scene | |
+| M3 | Detection and calibration | A6 scan, LRT refinement, Asimov, LEE, nuisances, A8, SBC | H0 false-positive rate at 3σ within ±20% over 10⁴ datasets | |
+| M4 | Inference, design, visibility | A7 posterior + evidence, A9 placement, A10 PSF and roses | intervals cover truth; greedy beats manual placement | |
+| M5 | Web experience | `ComputeBus`, workers, Observatory, Detect/Design/Characterise, URL codec, PWA | budgets met; a shared URL reproduces scene and counts exactly | |
+| M6 | Hardening and release | a11y, size and benchmark gates, calibration report, Pages deploy | published site inside every §1.5 budget at £0/month | |
+
+This table is the roadmap of record; `docs/ROADMAP.md` and the wiki mirror it, and the GitHub issues (`#5`–`#24`) are its decomposition.
+
+### 11.2 Sequencing
+
+```text
+M0 ─▶ M1 ─▶ M2 ─┐
+        └─▶ M3 ─┴─▶ M4 ─▶ M5 ─▶ M6
+```
+
+M1 must land first: every later milestone consumes `L` and `λ`. M2 and M3 can then run in parallel — they share the forward model and nothing else. M4 needs M3's template bank. M5 needs a stable façade, not M4, so web work can start as soon as the task protocol is frozen (§4.6). The tickets are a **task graph, not a list**: `blocked-by` links encode the edges, and `ready-for-agent` marks the frontier.
+
+### 11.3 Definition of done
+
+A ticket is done when: the code is merged with tests, the docs it invalidates are updated in the same PR, the issue is closed by that PR, and the board says `Done`. A PR that changes a budget, a tolerance or an approximation must say so in its description, because those numbers are the project's claims.
+
+### 11.4 What would change this plan
+
+| Trigger | Replan |
+|---|---|
+| Flux validation fails (R1) | M1 extends; no scenario ships until the table is within tolerance |
+| 3-D performance misses by > 2× (R4) | matrix-free default, 48³ default grid, matrix path demoted to Lab mode |
+| Calibration cannot reach ±20% (R5) | ship local p-values with an explicit warning, defer global claims to M6 |
+| WebGPU unavailable where it matters (R7) | WebGL2 becomes the primary renderer; no feature depends on WebGPU |
+
+---
+
+## 12. Risk register
+
+| ID | Risk | L | I | Mitigation | Early warning |
+|---|---|---|---|---|---|
+| R1 | Flux coefficients transcribed or implemented wrongly, so every count is wrong | M | High | digitised published curves as fixtures; 2%/5% acceptance; table versioning | parity fixtures drift, or the ±1% transmission regime does not reproduce |
+| R2 | Scope: 13 algorithms is more than one person can finish | High | Med | milestone gating; M2 ships A1–A4 only; A5/A13 stay stretch | an issue sits in `M2` that is not A1–A4 |
+| R3 | wasm core exceeds 700 KB | M | Med | `wasm-opt -O3`, feature gating, no `f64` kernels, size gate from M5 | size gate trend line across two milestones |
+| R4 | 3-D solve too slow on a mid laptop | M | Med | matrix-free path, adaptive grid, subsampled reconstruction during scrub | interactive budget missed in M2 benchmarks |
+| R5 | Calibration misses ±20% at 3σ | M | High | 10⁴-dataset harness early in M3, not at the end | first 1 000 datasets already outside band |
+| R6 | Browser memory at 96³ with 6 detectors | M | Med | deviceMemory gate, 64³ default, CSR memory accounted per task | OOM reports at 64³ |
+| R7 | WebGPU absent or buggy on target devices | L | Med | WebGL2 fallback is a first-class path, probed at boot | any feature that only works on WebGPU |
+| R8 | ONNX model too large or uncalibrated | M | Low | lazy load, ≤ 1.5 MB, SBC gate, never the default method | SBC KS test failing at 10⁴ draws |
+| R9 | Accessibility debt accumulates | M | Med | a11y gate from M5, manual checklist per release | checklist skipped for two releases |
+| R10 | Single-maintainer bandwidth | High | Med | small PRs, agent-ready tickets, documentation as a deliverable | open PRs > 5 or issues without acceptance criteria |
+| R11 | Spec/implementation drift | M | Med | ADRs, spec changelog (§14.7), docs updated in the same PR | a doc claim no test enforces |
+| R12 | Dependency majors break the build | M | Low | grouped dependabot, coupled upgrades in one PR (§9.7) | a dependabot PR that cannot pass alone |
+| R13 | Overclaiming in public copy | M | High | honesty rules (§8.3, §13.6); no "first" without a literature check | a sentence that would anger a physicist |
+| R14 | Licence of an asset unclear | L | Low | only OFL/CC0/generated assets; provenance in the manifest | an asset with no entry in §8.4 |
+
+The posture: **prefer honest degradation to silent overclaim.** Every risk above has a visible symptom, and the ones that matter (R1, R5, R13) are about truth rather than speed.
+
+---
+
+## 13. Repository layout, documentation and portfolio presentation
+
+### 13.1 Layout
+
+```text
+crates/               ten-crate Rust workspace (§5.1), dependency rule enforced by review
+web/                  Vite + React front end: protocol, state, compute, scenes
+  public/tables/v1/   versioned, immutable flux and range assets (§8.5)
+docs/                 architecture, physics, algorithms, roadmap, development, ADRs
+source/               this specification and the original CT lab, both unmodified
+.github/              CI, dependabot, PR and issue templates
+Cargo.toml            workspace manifest and release profile
+rust-toolchain.toml   stable + rustfmt + clippy + wasm32-unknown-unknown
+rustfmt.toml          the rules the fmt gate enforces
+.editorconfig         whitespace agreement across editors
+GLOSSARY.md           domain vocabulary (§13.5)
+CONTRIBUTING.md       the short version of §13.4
+README.md             entry point: what, why, how, honesty statement
+```
+
+`source/` is reference material, preserved as found: the design spec and the original lab that seeded the ray-integral picture. Nothing in the build imports it.
+
+### 13.2 Documentation map
+
+| Document | Owns |
+|---|---|
+| `README.md` | what it is, how to run it, where to read next, honesty statement |
+| `docs/ARCHITECTURE.md` | layers, crates, dependency rule, task graph, contract, invariants, budgets |
+| `docs/PHYSICS.md` | forward model, constants, fidelity levels, documented approximations |
+| `docs/ALGORITHMS.md` | A1–A13 portfolio, shared kernels, novelty claim |
+| `docs/ROADMAP.md` | milestones and exit criteria (mirror of §11) |
+| `docs/DEVELOPMENT.md` | setup, commands, CI, offline tooling, troubleshooting |
+| `docs/adr/` | decisions with context and consequences |
+| `GLOSSARY.md` | the words used in code, issues and docs |
+| this spec | the full design: equations, contracts, risks, appendices |
+| wiki | the same material, browsable, for people who will not clone |
+
+### 13.3 ADR policy
+
+An ADR is written when a decision is expensive to reverse: crate layering, static-hosting-only, determinism strategy, one-sided anomaly prior. Format: context, decision, consequences, alternatives rejected. ADRs are immutable; a reversal is a new ADR that supersedes the old one, and the old one stays on disk because the reasoning is part of the record.
+
+### 13.4 Work conventions
+
+| Artefact | Convention |
+|---|---|
+| Branch | `type/NN-slug`, one ticket per branch |
+| Commit | conventional subject (`feat(web): …`), body explains why |
+| PR body | summary with a diagram or diff sketch, acceptance criteria, evidence (before/after output), merge danger (one-way or two-way, blast radius) |
+| Issue | context, what to build, acceptance criteria, `blocked-by` links, milestone |
+| Labels | `type:*`, `area:*`, `priority:P0/P1/P2`, `status:blocked`, `ready-for-agent`, `spec:umbra` |
+| Board | `Todo` when the frontier opens, `In progress` when a branch exists, `Done` when merged |
+
+Evidence in a PR is not optional: "it works" is not evidence, a command and its output is.
+
+### 13.5 Naming
+
+Domain terms come from `GLOSSARY.md` — *opacity*, *ray cell*, *fidelity level*, *void*, *nuisance*, *look-elsewhere* — and are used identically in code, issues and copy. A new term enters through the glossary first, otherwise the same concept acquires three names and the codebase starts to lie about its own model.
+
+### 13.6 Portfolio presentation
+
+What a reviewer should be able to establish, and how quickly:
+
+| Time | Sees | Establishes |
+|---|---|---|
+| 10 s | README title, one-sentence pitch, status line, live link | what it is and that it exists |
+| 2 min | live Observatory: drag a detector, watch counts change, reconstruct | it is real and interactive |
+| 5 min | `/methods`: approximations, calibration plots, limitations | the author is honest about what is not known |
+| 15 min | `docs/ALGORITHMS.md`, CI badge, parity fixtures, benchmarks | the engineering is disciplined, not demo-driven |
+
+Supporting devices: a CI badge that reflects real gates; the calibration report published as an artifact; parity fixtures reviewable in the diff; a benchmark table with commands beside the numbers.
+
+What this repository must never do: show a reconstruction that is not computed from the displayed data; animate fake progress; claim a method is "first" without a literature check; present a schematic as a survey. The credibility of the whole thing rests on those four negatives.
+
+### 13.7 What it demonstrates
+
+A Rust numerical core with exact adjoints and an independent oracle; a portfolio of inverse-problem methods compared on identical data; calibrated statistics including a look-elsewhere correction; experimental design as a first-class feature; and a browser front end that respects payload, latency and accessibility budgets. That combination — physics, statistics, systems engineering and interface — is the point of the project, and the documentation is written so a reviewer can check each claim rather than take it on trust.
+
+---
+
+## 14. Appendices
+
+### 14.1 Notation and units
+
+Extends §2.2 with the symbols introduced later:
+
+| Symbol | Meaning | Units |
+|---|---|---|
+| `a`, `b` | CSDA ionisation and radiative coefficients | GeV cm² g⁻¹, cm² g⁻¹ |
+| `Λ` | L0 attenuation length | g cm⁻² |
+| `K_i` | `T ε_d A_d cos θ_i ΔΩ_i` | cm² s sr |
+| `w_i` | Fisher weight `(∂λ_i/∂X_i)² / λ_i` | — |
+| `g_i` | score template `ρ (L t_c)_i (−∂λ_i/∂X_i)` | — |
+| `α` | void amplitude, fraction of density removed | — |
+| `TS`, `Z` | test statistic and its square root (significance) | — |
+| `t₅σ` | median exposure for a 5σ discovery | s |
+| `U(S)` | design utility of a detector set | — |
+
+### 14.2 Default parameter set
+
+| Parameter | Value | Source |
+|---|---|---|
+| `a` | 2.0 × 10⁻³ GeV cm² g⁻¹ | standard rock, §2.3 |
+| `b` | 4.0 × 10⁻⁶ cm² g⁻¹ | standard rock, §2.3 |
+| bulk density | 2.65 g cm⁻³ | standard rock |
+| radiation length `X₀` | 26.5 g cm⁻² | standard rock |
+| detector area | 0.25 m² | default scenario |
+| efficiency | 0.9 | default scenario |
+| angular resolution (L2) | 10 mrad | detector model |
+| background | 0.05 Hz | soft-particle floor (L2) |
+| exposure | 30 days | default scenario |
+| discovery threshold | 5σ | decision default |
+| LEE trials | Euler-characteristic extrapolation from 20 null fields at `u₀` = 1σ | §5.6 |
+
+### 14.3 File formats
+
+**`.ubt` table** (little-endian, no compression — gzip handles transport):
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 4 | magic `UBT1` |
+| 4 | 2 | version `u16` |
+| 6 | 2 | flags (`bit0` = has derivative array) |
+| 8 | 4 | `n_e` `u32` |
+| 12 | 4 | `n_cos` `u32` |
+| 16 | 4 | `log10_e_min` `f32` |
+| 20 | 4 | `dlog10_e` `f32` |
+| 24 | 4 | `cos_min` `f32` |
+| 28 | 4 | `dcos` `f32` |
+| 32 | 4·n_e·n_cos | Φ values, E-major |
+| … | 4·n_e·n_cos | I values (optional by flag) |
+| end−32 | 32 | SHA-256 of everything before it |
+
+Other formats are defined and pointed to rather than duplicated: scene JSON (§8.1), task protocol (§4.6), URL codec (§8.6), ONNX IO (§6.4).
+
+### 14.4 Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| `1`–`4` | fidelity L0–L2 / toggle systematics |
+| `d` | add detector at the crosshair |
+| `space` | play/pause exposure |
+| `r` | re-run the current reconstruction |
+| `[` `]` | exposure −/+ one step |
+| `?` | shortcut sheet |
+| `Esc` | cancel the running task |
+
+### 14.5 Glossary
+
+See `GLOSSARY.md`; the wiki mirrors it. Terms are authoritative there, not here — this appendix only records that the vocabulary is normative.
+
+### 14.6 Bibliography
+
+Flux and ranges: Gaisser (1990); Guan et al. (2015); Groom, Mokhov & Striganov (2001). Muography: Morishima et al. (2017); Procureur et al. (2023). Reconstruction: Lange & Carson (1984); Erdoğan & Fessler (1999); Rudin, Osher & Fatemi (1992); Chambolle & Pock (2011); Beck & Teboulle (2009); Venkatakrishnan et al. (2013); Romano, Elad & Milanfar (2017). Statistics: Cowan et al. (2011); Gross & Vitells (2010); Wald (1945); Talts et al. (2018). Inference and design: Goodman & Weare (2010); Skilling (2006); Chaloner & Verdinelli (1995); Nemhauser et al. (1978); Fessler & Rogers (1996). Learned inference: Cranmer, Brehmer & Louppe (2020); Lemos et al. (2023).
+
+### 14.7 Spec changelog
+
+| Version | Date | Change |
+|---|---|---|
+| v0.1 | 2026-11-18 | §1–§5: vision, physics, algorithm portfolio, architecture, compute core |
+| v0.2 | 2026-11-18 | §6–§14 written: offline tooling and oracle, front end, data and assets, build and hosting, testing and calibration, roadmap, risks, repository and portfolio, appendices. §9.7 records the coupled-dependency rule after `vite` 8 and `@vitejs/plugin-react` 6 each failed `npm install` alone; §11 is reconciled with the shipped M0 state |
+
+**Known gaps, stated rather than implied:**
+
+1. No repository licence has been chosen yet. This blocks nothing internally and everything publicly; it must be decided before M6.
+2. A5 (plug-and-play) and A13 (amortised SBI) have no acceptance criteria beyond "calibrated or not shipped" — they are stretch items and the criteria would be guesses.
+3. The L2 multiple-scattering constants are transcribed from Highland but not yet validated against a transport reference; until M3 they are labelled approximate in the UI.
+4. The Methods page copy does not exist; the physics text in `docs/PHYSICS.md` is its source material.
+5. No accessibility audit has been performed; the gate arrives with M5.
 

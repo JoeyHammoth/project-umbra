@@ -1,10 +1,11 @@
 # Roadmap
 
 Milestones are ordered so that each one leaves the repository demonstrable. The
-design spec is a v0.1 draft: §6–§14 (offline tooling, front end, assets, CI,
-testing, roadmap, risks, layout, appendices) are listed in its table of contents
-but not yet written, so this roadmap is derived from §1–§5 and grows as the spec
-does.
+design spec is now complete (v0.2): §6–§14 cover offline tooling and the Python
+oracle, the front end, assets and scenarios, build and hosting, testing and
+calibration, this roadmap, the risk register, repository conventions and the
+appendices. Spec §11 is the roadmap of record and this file mirrors it; where
+they disagree, fix both in the same PR.
 
 ## M0 — Foundation *(this milestone)*
 
@@ -17,7 +18,7 @@ Exit criteria:
 - [x] `cargo fmt`, `clippy -D warnings`, `cargo test` wired into CI
 - [x] Web shell with the Rust ↔ TypeScript contract transcribed
 - [x] README, architecture, physics, algorithms, glossary, ADRs, wiki
-- [ ] First green CI run on `main`
+- [x] First green CI run on `main`
 
 ## M1 — Physics core and forward model
 
