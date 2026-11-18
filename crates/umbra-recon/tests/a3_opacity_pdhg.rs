@@ -240,10 +240,11 @@ fn the_gap_falls_and_the_primal_objective_ends_far_below_its_start() {
         gaps.push(report.gap.expect("A3 reports its certificate"));
     }
 
-    // PDHG is not a descent method: the primal objective can rise while the
-    // dual catches up, and it does here. The guarantee the algorithm has is on
-    // the *gap*, which is what this test checks; the rise is counted and printed
-    // so the claim in the docs is the measured one rather than the hoped-for one.
+    // PDHG is not a descent method: the primal objective rises while the dual
+    // catches up, and it does here. The criterion is therefore about the
+    // *best* iterate — which is what a non-monotone solver can promise, and what
+    // a caller reads out of `estimate()` — together with the gap, which is the
+    // guarantee the algorithm does have (#12, re-scoped).
     let rises = primal.windows(2).filter(|pair| pair[1] > pair[0]).count();
     let worst_rise = primal
         .windows(2)
@@ -251,6 +252,21 @@ fn the_gap_falls_and_the_primal_objective_ends_far_below_its_start() {
         .map(|pair| pair[1] / pair[0])
         .fold(1.0f64, f64::max);
     println!("primal rises {rises} times in 200, worst by a factor {worst_rise:.3}");
+
+    let best = primal.iter().copied().fold(f64::INFINITY, f64::min);
+    let end = *primal.last().expect("200 steps were taken");
+    assert!(
+        best <= 0.01 * primal[0],
+        "the best iterate only reached {best:.3e} from {:.3e}: not two orders of magnitude",
+        primal[0]
+    );
+    // A non-monotone method is allowed to rise, not to end somewhere it would not
+    // return: if the last iterate is far from the best, the answer depends on
+    // when the caller stopped.
+    assert!(
+        end <= 10.0 * best,
+        "the final iterate {end:.3e} is far from the best {best:.3e}"
+    );
 
     println!(
         "primal {:.6e} -> {:.6e}; gap {:.3e} -> {:.3e} (ratio {:.3e})",
