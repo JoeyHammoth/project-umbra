@@ -24,4 +24,10 @@ crates/umbra-forward/tests/fixtures/oracle/prism_fine.json   generated  python -
 # The shared default scene's golden dataset: the density, lambda and counts that
 # every solver reconstructs (spec §11.1). Regenerated from the committed scene by
 # `cargo run -p umbra-cli -- golden`; the CLI test fails when it is stale.
-crates/umbra-recon/tests/golden/default.json  generated  cargo run -p umbra-cli -- golden
+crates/umbra-recon/tests/golden/default.json  generated  cargo run -p umbra-cli -- golden --scene web/src/scenes/default.json
+
+# The four-pose scene's golden dataset. A second scene exists because the default
+# one has a single detector: ordered-subset acceleration needs several views to
+# alternate between, and a buried void needs more than one direction to be
+# identifiable at all.
+crates/umbra-recon/tests/golden/multiview.json  generated  cargo run -p umbra-cli -- golden --scene web/src/scenes/multiview.json --out crates/umbra-recon/tests/golden/multiview.json

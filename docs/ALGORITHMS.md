@@ -36,7 +36,9 @@ in each run's log.
 The scene has one detector, so its 32 rays are a single view. That is enough to
 compare solvers and not enough to test ordered-subset acceleration, which needs
 several distinct views to alternate between — the criterion in #10 is re-scoped
-to a multi-view scene for exactly that reason.
+to a multi-view scene for exactly that reason. That scene now exists:
+`web/src/scenes/multiview.json`, four poses, 64 rays, with a void buried at the
+mid-plane that no single view can place.
 
 ## Why these, and how they relate
 

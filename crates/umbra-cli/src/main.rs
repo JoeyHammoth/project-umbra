@@ -226,9 +226,15 @@ fn mean(values: &[f32]) -> f32 {
 }
 
 /// The golden document for a scene, and its count hash.
-fn golden_document(spec: &SceneSpec) -> (Json, String) {
+///
+/// `scene` is the path the dataset was generated from, not a constant: once a
+/// second scene exists, a golden that names the wrong file is provenance that
+/// lies, and nothing downstream would notice.
+fn golden_document(spec: &SceneSpec, scene: &Path) -> (Json, String) {
     let data = dataset(spec);
     let hash = counts_hash(&data.counts);
+    let scene_path = scene.display().to_string();
+    let command = format!("cargo run -p umbra-cli -- golden --scene {scene_path}");
     let document = Json::Object(vec![
         ("schema".to_string(), Json::from(GOLDEN_SCHEMA)),
         ("scene_id".to_string(), Json::from(spec.id.as_str())),
@@ -290,11 +296,8 @@ fn golden_document(spec: &SceneSpec) -> (Json, String) {
         (
             "generated_by".to_string(),
             Json::Object(vec![
-                (
-                    "command".to_string(),
-                    Json::from("cargo run -p umbra-cli -- golden"),
-                ),
-                ("scene".to_string(), Json::from(DEFAULT_SCENE)),
+                ("command".to_string(), Json::from(command.as_str())),
+                ("scene".to_string(), Json::from(scene_path.as_str())),
                 (
                     "umbra_version".to_string(),
                     Json::from(env!("CARGO_PKG_VERSION")),
@@ -307,7 +310,7 @@ fn golden_document(spec: &SceneSpec) -> (Json, String) {
 
 fn write_golden(scene: &Path, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let spec = load_scene(scene)?;
-    let (document, hash) = golden_document(&spec);
+    let (document, hash) = golden_document(&spec, scene);
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -449,20 +452,40 @@ mod tests {
         assert_eq!(LinearOperator::ncols(&system), 1024);
     }
 
-    #[test]
-    fn the_committed_golden_matches_a_fresh_evaluation() {
+    /// The four-pose scene: several views, and a void no single view can place.
+    const MULTIVIEW_SCENE: &str = "web/src/scenes/multiview.json";
+    /// The four-pose scene's golden dataset.
+    const MULTIVIEW_GOLDEN: &str = "crates/umbra-recon/tests/golden/multiview.json";
+
+    fn assert_golden_is_fresh(scene: &str, golden: &str) {
         // Byte equality of the regenerated document, not a loose comparison: the
         // golden is a reviewed artefact, and a stale one would let a physics
         // change land without anyone reading it (§13.5).
-        let spec = load_scene(&committed(DEFAULT_SCENE)).expect("the default scene must load");
-        let (fresh, _) = golden_document(&spec);
+        let path = committed(scene);
+        let spec = load_scene(&path).expect("the scene must load");
+        // Provenance records the repository-relative path the documented command
+        // uses, not the absolute path this test loads from: a golden that named
+        // its author's home directory would differ on every machine.
+        let (fresh, _) = golden_document(&spec, Path::new(scene));
         let rendered = format!("{}\n", json::to_string_pretty(&fresh));
-        let committed_golden = fs::read_to_string(committed(DEFAULT_GOLDEN))
+        let committed_golden = fs::read_to_string(committed(golden))
             .expect("the golden dataset must be committed at crates/umbra-recon/tests/golden");
         assert_eq!(
             rendered, committed_golden,
-            "the golden dataset is stale: run `cargo run -p umbra-cli -- golden` and review the diff"
+            "{golden} is stale: run `cargo run -p umbra-cli -- golden --scene {scene} --out {golden}` and review the diff"
         );
+    }
+
+    #[test]
+    fn the_committed_golden_matches_a_fresh_evaluation() {
+        assert_golden_is_fresh(DEFAULT_SCENE, DEFAULT_GOLDEN);
+    }
+
+    #[test]
+    fn the_multiview_golden_matches_a_fresh_evaluation() {
+        // Two scenes, two goldens: a second fixture nobody regenerates is a
+        // fixture that quietly stops describing its scene.
+        assert_golden_is_fresh(MULTIVIEW_SCENE, MULTIVIEW_GOLDEN);
     }
 
     #[test]
