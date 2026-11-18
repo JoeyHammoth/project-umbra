@@ -7,7 +7,7 @@ data, with each method's failure mode visible. ★ marks the distinctive items.
 |---|---|---|---|
 | A1 | Transmission EM family (Lange–Carson, OSTR, SPS) | `umbra-recon` | `TransmissionEm` implemented (L0), ordered subsets with a monotone guard |
 | A2 | Nonlinear Poisson MAP + Huber TV, L-BFGS-B, box constraints | `umbra-recon` | `PoissonMap` implemented: projected L-BFGS over Huber TV, L0 and L1 |
-| A3 | Opacity-domain inversion + Chambolle–Pock PDHG with TV | `umbra-recon` | not started |
+| A3 | Opacity-domain inversion + Chambolle–Pock PDHG with TV | `umbra-recon` | `OpacityPdhg` implemented: safeguarded Newton per ray, delta-method weights, PDHG on `[L; ∇]` with a primal–dual gap |
 | A4 ★ | Reference-anchored one-sided sparse deviation (FISTA) | `umbra-recon` | not started |
 | A5 | Plug-and-play with a learned denoiser (ONNX) | `umbra-recon` + web worker | not started (stretch) |
 | A6 ★ | Profile-likelihood scan, Asimov, Euler-characteristic LEE | `umbra-stats` | `asimov_significance` implemented |
@@ -32,6 +32,15 @@ penalty would look like a better reconstruction.
 time-to-fit for each entry, and CI runs it on every push. A 10% regression gate
 needs a controlled baseline and is M6's work; until then the number is recorded
 in each run's log.
+
+A3 is measured differently on purpose: it has a dual certificate, so "converged"
+means the gap fell to a fraction of the objective rather than that the iterate
+stopped moving. On the shared scene the gap falls from `1.9e8` to `2.3e5` in 200
+iterations — but the primal objective *rises* 20 times along the way, by up to a
+factor of 1.89. PDHG is not a descent method: the primal moves while the dual
+catches up, and any claim that its objective decreases monotonically would be
+false. What is guaranteed is the gap, which is why it is what the solver reports
+and what the test asserts.
 
 The scene has one detector, so its 32 rays are a single view. That is enough to
 compare solvers and not enough to test ordered-subset acceleration, which needs

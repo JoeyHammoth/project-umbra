@@ -27,7 +27,8 @@ use umbra_forward::scene::SceneSpec;
 use umbra_forward::{build_system_2d, expected};
 use umbra_physics::{generate_default, Fidelity, FluxTable};
 use umbra_recon::{
-    A1Config, A2Config, Control, PoissonMap, Problem, Solver, StepReport, TransmissionEm,
+    A1Config, A2Config, A3Config, Control, OpacityPdhg, PoissonMap, Problem, Solver, StepReport,
+    TransmissionEm,
 };
 
 /// The data-fit level every solver is timed to, in NLL.
@@ -133,6 +134,7 @@ fn portfolio(scene: &SceneSpec) -> Vec<Entry> {
         ..A1Config::from_scene(scene)
     };
     let a2 = A2Config::from_scene(scene);
+    let a3 = A3Config::from_scene(scene);
     vec![
         Entry {
             id: "a1-transmission-em",
@@ -141,6 +143,10 @@ fn portfolio(scene: &SceneSpec) -> Vec<Entry> {
         Entry {
             id: "a2-poisson-map",
             make: Box::new(move |data| Box::new(PoissonMap::new(&data.problem(), a2.clone()))),
+        },
+        Entry {
+            id: "a3-opacity-pdhg",
+            make: Box::new(move |data| Box::new(OpacityPdhg::new(&data.problem(), a3.clone()))),
         },
     ]
 }
