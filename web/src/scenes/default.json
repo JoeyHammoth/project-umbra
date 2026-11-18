@@ -1,0 +1,28 @@
+{
+  "schema": "umbra.scene/1",
+  "id": "default-slab",
+  "label": "Default slab with a known corridor void",
+  "schematic": true,
+  "units": { "length": "m", "density": "g/cm3" },
+  "primitives": [
+    { "kind": "box", "c": [0, 0, 0], "half": [6, 1, 6], "rot": [0, 0, 0, 1], "rho": 2.65 }
+  ],
+  "voids": [
+    { "kind": "capsule", "a": [-3, 0, 0], "b": [3, 0, 0], "r": 0.5 }
+  ],
+  "detectors": [
+    {
+      "pose": { "p": [0.25, -9, 0], "n": [0, 1, 0], "up": [1, 0, 0] },
+      "area_m2": 0.25,
+      "eff": 0.9,
+      "bins": { "flat": { "min": -0.5, "max": 0.5, "bins": 32 } },
+      "sigma_ang_mrad": 10,
+      "bg_rate_hz": 0.05
+    }
+  ],
+  "physics": { "level": "L1", "a": 2.0e-3, "b": 4.0e-6, "rho_bulk": 2.65, "x0": 26.5 },
+  "exposure_s": 2592000,
+  "grid": { "n": [32, 32], "h_m": 0.5, "origin_m": [-8, -8] },
+  "seed": 7,
+  "notes": "Schematic and not modelled on any real structure: a 12 m x 2 m slab of standard-rock density with one 1 m wide corridor through it. Shared by every solver so their reconstructions are comparable, and by the golden dataset that pins their output."
+}
