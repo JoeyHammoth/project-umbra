@@ -1308,12 +1308,12 @@ Flux and ranges: Gaisser (1990); Guan et al. (2015); Groom, Mokhov & Striganov (
 | v0.1 | 2026-11-18 | §1–§5: vision, physics, algorithm portfolio, architecture, compute core |
 | v0.2 | 2026-11-18 | §6–§14 written: offline tooling and oracle, front end, data and assets, build and hosting, testing and calibration, roadmap, risks, repository and portfolio, appendices. §9.7 records the coupled-dependency rule after `vite` 8 and `@vitejs/plugin-react` 6 each failed `npm install` alone; §11 is reconciled with the shipped M0 state |
 | v0.3 | 2026-11-18 | §2.3 corrected: the flux is Guan et al. Eq. 3 (energy **multiplied** by the low-energy bracket, plus the curvature effective angle), not Gaisser's original Eq. 1. With the fix the table agrees with an independent quadrature to 0.08% and reproduces the 70 m⁻² s⁻¹ sr⁻¹ anchor at 1 GeV. §2.1's "about 1% transmission" is clarified as the ~75 m regime (≈70% at 3.8 m) |
+| v0.4 | 2026-11-18 | Licensing decided. The repository is MIT (`LICENSE`), every crate declares `license = "MIT"` by inheriting `[workspace.package]`, and `THIRD-PARTY-NOTICES.md` records the one piece of vendored third-party material — the Random123 `kat_vectors` fixture used as RNG test data — under its BSD-3-Clause terms, with the notice reproduced in full. §14.7 gap 1 is closed |
 
 **Known gaps, stated rather than implied:**
 
-1. No repository licence has been chosen yet. This blocks nothing internally and everything publicly; it must be decided before M6.
-2. A5 (plug-and-play) and A13 (amortised SBI) have no acceptance criteria beyond "calibrated or not shipped" — they are stretch items and the criteria would be guesses.
-3. The L2 multiple-scattering constants are transcribed from Highland but not yet validated against a transport reference; until M3 they are labelled approximate in the UI.
-4. The Methods page copy does not exist; the physics text in `docs/PHYSICS.md` is its source material.
-5. No accessibility audit has been performed; the gate arrives with M5.
+1. A5 (plug-and-play) and A13 (amortised SBI) have no acceptance criteria beyond "calibrated or not shipped" — they are stretch items and the criteria would be guesses.
+2. The L2 multiple-scattering constants are transcribed from Highland but not yet validated against a transport reference; until M3 they are labelled approximate in the UI.
+3. The Methods page copy does not exist; the physics text in `docs/PHYSICS.md` is its source material.
+4. No accessibility audit has been performed; the gate arrives with M5.
 
