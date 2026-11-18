@@ -1,0 +1,12 @@
+[package]
+name = "umbra-vis"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Visibility and resolution analysis: Fisher maps, local PSF, null-space modes for UMBRA"
+
+[dependencies]
+umbra-core.workspace = true
+umbra-forward.workspace = true
+umbra-physics.workspace = true
