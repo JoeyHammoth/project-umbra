@@ -7,7 +7,7 @@ calibration, this roadmap, the risk register, repository conventions and the
 appendices. Spec §11 is the roadmap of record and this file mirrors it; where
 they disagree, fix both in the same PR.
 
-## M0 — Foundation *(this milestone)*
+## M0 — Foundation
 
 **Deliverable:** a workspace that builds, gates that run, and documentation that
 explains the shape of the project before any science lands.
@@ -25,16 +25,16 @@ Exit criteria:
 **Deliverable:** a 2-D scene becomes a CSR operator, and `λ` can be produced and
 sampled at any exposure — verifiable against the CT lab and analytic chords.
 
-- Flux/range table generator in `umbra-cli`, validated against published curves
-- 2-D DDA traversal producing exact `L_ij`, with an analytic-chord oracle test
-- L0 and L1 forward model with exact gradients
-- Checkpointed binomial Poisson simulator (monotone exposure scrubbing)
-- Python oracle parity harness
+- [x] Flux/range table generator in `umbra-cli`, validated against published curves
+- [x] 2-D DDA traversal producing exact `L_ij`, with an analytic-chord oracle test
+- [x] L0 and L1 forward model with exact gradients
+- [x] Checkpointed binomial Poisson simulator (monotone exposure scrubbing)
+- [x] Python oracle parity harness
 
 Exit criteria: opacity from traversal matches analytic chords to tolerance for
 box, prism and ellipsoid targets; MC counts agree with `λ_i` by a χ² test.
 
-## M2 — Reconstruction portfolio
+## M2 — Reconstruction portfolio *(this milestone)*
 
 **Deliverable:** A1–A4 reconstruct the same simulated dataset, side by side, in
 the Lab.
