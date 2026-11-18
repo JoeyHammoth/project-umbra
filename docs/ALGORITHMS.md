@@ -108,6 +108,14 @@ to a multi-view scene for exactly that reason. That scene now exists:
 `web/src/scenes/multiview.json`, four poses, 64 rays, with a void buried at the
 mid-plane that no single view can place.
 
+Measured on it, A1 reaches 90% of a full sweep's objective decrease in **0.88
+sweeps with 8 subsets, against 16 full sweeps** — 0.05×, well inside the 0.5×
+the criterion asks for. `tests/multiview.rs` asserts that bound, so a change to
+the partition cannot quietly spend the acceleration. The 90% target is
+load-bearing: the last parts in 10⁶ are exactly where a guarded subset step
+stops descending and reports convergence instead, so demanding agreement there
+would measure the stopping rule rather than the acceleration.
+
 ## Why these, and how they relate
 
 The classical muography method is filtered back projection, which assumes

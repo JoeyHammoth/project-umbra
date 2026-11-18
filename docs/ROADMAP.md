@@ -34,12 +34,14 @@ sampled at any exposure — verifiable against the CT lab and analytic chords.
 Exit criteria: opacity from traversal matches analytic chords to tolerance for
 box, prism and ellipsoid targets; MC counts agree with `λ_i` by a χ² test.
 
-## M2 — Reconstruction portfolio *(this milestone)*
+## M2 — Reconstruction portfolio
 
 **Deliverable:** A1–A4 reconstruct the same simulated dataset, side by side, in
 the Lab.
 
 - [x] A1 transmission EM baseline (L0)
+- [x] Ordered-subset acceleration on the four-view scene: 0.88 sweeps against
+      16
 - [x] A2 nonlinear Poisson MAP with L-BFGS-B and Huber TV
 - [x] A3 opacity inversion + PDHG
 - [x] A4 one-sided sparse deviation with FISTA
