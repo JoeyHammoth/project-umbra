@@ -241,4 +241,158 @@ mod tests {
         assert_eq!(p.counts(-50.0), vec![0, 0]);
         assert_eq!(p.counts(1e9), p.counts(p.t_max));
     }
+
+    /// Survival function of the χ² distribution, for even `df` only.
+    ///
+    /// For `df = 2a` the regularised upper incomplete gamma collapses to the
+    /// finite Poisson tail `Q(a, y) = exp(−y) Σ_{k<a} y^k / k!`, so the goodness
+    /// of fit below needs no incomplete-gamma implementation and no new
+    /// dependency. `chi2_survival_matches_published_critical_values` pins the
+    /// arithmetic against standard tables.
+    fn chi2_sf(x: f64, df: usize) -> f64 {
+        assert!(df > 0 && df.is_multiple_of(2), "even df required, got {df}");
+        let a = df / 2;
+        let y = 0.5 * x;
+        if y <= 0.0 {
+            return 1.0;
+        }
+        let mut term = 1.0f64;
+        let mut sum = 1.0f64;
+        for k in 1..a {
+            term *= y / k as f64;
+            sum += term;
+        }
+        // Both factors are finite for the `df` and `x` this test reaches; the
+        // product can still underflow to zero for a wildly unlikely dataset,
+        // which is the correct answer.
+        (sum * (-y).exp()).clamp(0.0, 1.0)
+    }
+
+    /// Groups an ascending `λ` vector into bins of at least `min_expected`
+    /// counts.
+    ///
+    /// Pooling depends on `λ` only, never on the observed counts — pooling by
+    /// the data would break the null distribution the statistic is compared
+    /// against.
+    fn pool(lambda: &[f32], min_expected: f64) -> Vec<Vec<usize>> {
+        let mut bins: Vec<Vec<usize>> = Vec::new();
+        let mut current: Vec<usize> = Vec::new();
+        let mut mass = 0.0;
+        for (index, value) in lambda.iter().enumerate() {
+            current.push(index);
+            mass += f64::from(*value);
+            if mass >= min_expected {
+                bins.push(std::mem::take(&mut current));
+                mass = 0.0;
+            }
+        }
+        match bins.last_mut() {
+            // A short remainder joins the last full bin rather than forming a
+            // bin with too few expected counts to be worth a χ² term.
+            Some(last) => last.extend(current),
+            None if !current.is_empty() => bins.push(current),
+            None => {}
+        }
+        bins
+    }
+
+    #[test]
+    fn chi2_survival_matches_published_critical_values() {
+        // Upper 5% critical values, standard tables: the survival function is
+        // 0.05 at each of these, to the three decimals a table carries.
+        for (df, critical) in [
+            (2usize, 5.991),
+            (4, 9.488),
+            (10, 18.307),
+            (20, 31.410),
+            (100, 124.342),
+        ] {
+            let sf = chi2_sf(critical, df);
+            assert!(
+                (sf - 0.05).abs() < 1e-3,
+                "df {df}: survival {sf:.6} at x = {critical}, expected 0.05"
+            );
+        }
+        // df = 2 is the exponential with mean 2, where the form is exactly
+        // exp(−x/2): these two anchors would catch an off-by-one in the sum.
+        assert!((chi2_sf(0.0, 2) - 1.0).abs() < 1e-12);
+        assert!((chi2_sf(2.0, 2) - (-1.0f64).exp()).abs() < 1e-12);
+        assert!(chi2_sf(3.0, 2) < chi2_sf(2.0, 2));
+    }
+
+    #[test]
+    fn counts_are_poisson_with_the_claimed_mean() {
+        // Ascending λ shaped like a real scene: mostly faint rays, a few strong
+        // ones. Seeds are fixed, so the assertions are deterministic and any
+        // movement is a change in the sampler, not flakiness.
+        let lambda: Vec<f32> = vec![
+            0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.9, 2.2, 2.5, 2.8, 3.1, 3.5, 4.0, 4.5,
+            5.0, 5.5, 6.0, 7.0, 8.0, 9.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 23.0, 26.0, 30.0,
+            35.0, 40.0, 46.0, 52.0, 60.0, 70.0, 80.0, 92.0, 105.0, 120.0, 140.0, 160.0, 185.0,
+            210.0, 240.0, 275.0, 310.0, 350.0,
+        ];
+        let mut bins = pool(&lambda, 5.0);
+        // Odd bin count => even df, which is what the closed form needs. The bin
+        // count is a free parameter of the test's design, not of the sampler.
+        if bins.len().is_multiple_of(2) {
+            let tail = bins.pop().expect("at least one bin");
+            bins.last_mut().expect("a preceding bin").extend(tail);
+        }
+        let df = bins.len() - 1;
+        assert!(df >= 2, "too few bins for a χ² test: {}", bins.len());
+        let expected: Vec<f64> = bins
+            .iter()
+            .map(|bin| bin.iter().map(|&i| f64::from(lambda[i])).sum())
+            .collect();
+
+        // Counts reach full exposure through 64 independent Poisson increments,
+        // so the total must be Poisson(λ_i) — the whole distribution, not just
+        // the mean that `mean_counts_match_the_expected_scale` already checks.
+        let trials = 200u64;
+        let mut chi2s = Vec::with_capacity(trials as usize);
+        let mut upper_tail = 0usize;
+        for seed in 0..trials {
+            let p = process(&lambda, 3600.0, seed, 3);
+            let counts = p.counts(p.t_max);
+            let chi2: f64 = bins
+                .iter()
+                .zip(&expected)
+                .map(|(bin, mu)| {
+                    let observed: f64 = bin.iter().map(|&i| f64::from(counts[i])).sum();
+                    (observed - mu) * (observed - mu) / mu
+                })
+                .sum();
+            if chi2_sf(chi2, df) < 0.05 {
+                upper_tail += 1;
+            }
+            chi2s.push(chi2);
+        }
+
+        // E[χ²] = df, with sampling sd sqrt(2 df / trials) on the mean of the
+        // sample. Scatter either side of Poisson moves this immediately.
+        let mean = chi2s.iter().sum::<f64>() / trials as f64;
+        let mean_sigma = (2.0 * df as f64 / trials as f64).sqrt();
+        assert!(
+            (mean - df as f64).abs() < 4.0 * mean_sigma,
+            "mean χ² {mean:.2} over {trials} trials vs df {df} (sampling sd {mean_sigma:.2}): \
+             the counts do not carry the Poisson scatter their mean claims"
+        );
+
+        // Under H0 exactly 5% of datasets land in the upper tail. The floor is
+        // the important half: a simulator that returned λ with no scatter at all
+        // scores χ² = 0, p = 1, tail rate zero — and must fail.
+        let rate = upper_tail as f64 / trials as f64;
+        let rate_sigma = (0.05 * 0.95 / trials as f64).sqrt();
+        let ceiling = 0.05 + 4.0 * rate_sigma;
+        assert!(
+            rate >= 0.005 && rate <= ceiling,
+            "upper-tail rate {rate:.3} over {trials} trials, expected 0.05 (4σ band up to \
+             {ceiling:.3}): zero means the counts carry no Poisson scatter, high means \
+             over-dispersion"
+        );
+        println!(
+            "poisson goodness of fit: df {df}, {trials} trials, mean χ² {mean:.2}, \
+             upper-tail rate {rate:.3} (expected 0.05)"
+        );
+    }
 }
