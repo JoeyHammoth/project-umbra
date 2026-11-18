@@ -1500,6 +1500,8 @@
   "analytic_tolerance": null,
   "analytic_floor": 0.01,
   "analytic_gap_measured": 1.0,
+  "analytic_mean_tolerance": null,
+  "analytic_mean_gap_measured": -0.14921191607063122,
   "voxel_tolerance": 0.0001,
   "quad_eps": 1e-11,
   "max_path_m": 24.0,

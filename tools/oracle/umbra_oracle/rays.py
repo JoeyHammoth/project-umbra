@@ -47,16 +47,29 @@ def fan(centre, angles, offsets, standoff: float) -> list[dict]:
     return rays
 
 
-def jittered(centre, rng, count: int, standoff: float) -> list[dict]:
+def jittered(
+    centre,
+    rng,
+    count: int,
+    standoff: float,
+    phi_centre: float = 0.0,
+    phi_half_span: float = math.pi,
+    offset_half_span: float = 2.0,
+) -> list[dict]:
     """Seeded rays at awkward angles, aimed inside the scene half-width.
 
     These exist so the fixture is not only the tidy angle/offset comb; the seed
     is recorded in the fixture, so regenerating reproduces them exactly.
+
+    The spans narrow the fan for small, finely gridded scenes, where a uniformly
+    random `phi` would mostly produce grazing rays that no voxel field can
+    represent. The defaults are the full spans the coarse fixtures use, and they
+    draw from the generator in the same order, so those fixtures are unchanged.
     """
     rays = []
     for _ in range(count):
-        phi = float(rng.uniform(-math.pi, math.pi))
-        offset = float(rng.uniform(-2.0, 2.0))
+        phi = float(rng.uniform(phi_centre - phi_half_span, phi_centre + phi_half_span))
+        offset = float(rng.uniform(-offset_half_span, offset_half_span))
         direction = unit_direction(phi)
         target = np.asarray(centre, dtype=float) + offset * perpendicular(phi)
         origin = target - standoff * direction

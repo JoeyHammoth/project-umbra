@@ -30,6 +30,7 @@ same units ``System::opacity`` uses.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -101,6 +102,45 @@ class Circle(Shape):
         a = direction[0] ** 2 + direction[1] ** 2
         b = 2.0 * (px * direction[0] + py * direction[1])
         c = px * px + py * py - self.r**2
+        disc = b * b - 4.0 * a * c
+        if disc <= 0.0 or a <= 0.0:
+            return (0.0, 0.0)
+        root = np.sqrt(disc)
+        t1 = (-b - root) / (2.0 * a)
+        t2 = (-b + root) / (2.0 * a)
+        t_enter = max(t1, 0.0)
+        t_exit = min(t2, length)
+        return (t_enter, t_exit) if t_exit > t_enter else (0.0, 0.0)
+
+
+@dataclass
+class Ellipse(Shape):
+    """Axis-aligned ellipse: the slice-plane section of `Primitive::Ellip`.
+
+    There is deliberately no rotation field. Slice mode ignores primitive
+    rotations (`chords::chord_len` says so in as many words), so an ellipse that
+    could rotate would describe a scene the forward model cannot represent, and
+    the fixture would be comparing two different objects.
+    """
+
+    x0: float
+    y0: float
+    semi_x: float
+    semi_y: float
+
+    def inside(self, x, y):
+        return ((x - self.x0) ** 2 / self.semi_x**2) + (
+            (y - self.y0) ** 2 / self.semi_y**2
+        ) <= 1.0
+
+    def interval(self, origin, direction, length):
+        # Same scaled-quadratic solve the Rust side does, kept independent of it
+        # by being written from the algebra rather than transliterated.
+        px, py = (origin[0] - self.x0) / self.semi_x, (origin[1] - self.y0) / self.semi_y
+        vx, vy = direction[0] / self.semi_x, direction[1] / self.semi_y
+        a = vx * vx + vy * vy
+        b = 2.0 * (px * vx + py * vy)
+        c = px * px + py * py - 1.0
         disc = b * b - 4.0 * a * c
         if disc <= 0.0 or a <= 0.0:
             return (0.0, 0.0)
@@ -284,3 +324,21 @@ def self_test() -> None:
     triangle = Polygon([(0.0, 0.0), (2.0, 0.0), (0.0, 2.0)])
     across = triangle.chord(np.array([-1.0, 0.5]), direction, 10.0)
     assert abs(across - 1.5) < 1e-12, f"triangle chord {across}"
+
+    ellipse = Ellipse(0.0, 0.0, 2.0, 1.0)
+    assert abs(ellipse.chord(np.array([-5.0, 0.0]), direction, 10.0) - 4.0) < 1e-12
+    assert (
+        abs(ellipse.chord(np.array([0.0, -5.0]), np.array([0.0, 1.0]), 10.0) - 2.0)
+        < 1e-12
+    )
+    # Off-centre and oblique: the closed form and the quadrature of the point
+    # predicate must agree. A semi-axis in the wrong place, a missing division by
+    # semi**2 or a rotated axis all break this while leaving the centre rays
+    # above intact.
+    angle = 0.2915
+    oblique = np.array([math.cos(angle), math.sin(angle)])
+    start = np.array([-5.0, -0.5])
+    closed = ellipse.chord(start, oblique, 10.0)
+    quadrature = analytic_opacity([ellipse], 1.0, start, oblique, 10.0) / CM_PER_M
+    assert closed > 0.5, f"oblique ellipse chord {closed} misses the shape"
+    assert abs(closed - quadrature) < 1e-8, f"ellipse {closed} vs quadrature {quadrature}"

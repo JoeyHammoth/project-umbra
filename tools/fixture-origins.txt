@@ -15,6 +15,8 @@ crates/umbra-core/tests/kat_vectors    third-party
 
 # Produced by tools/oracle/umbra_oracle, regenerated with the command recorded in
 # each file's `generated_by` block and in docs/DEVELOPMENT.md.
-crates/umbra-forward/tests/fixtures/oracle/box.json       generated  python -m umbra_oracle fixtures --seed 7
-crates/umbra-forward/tests/fixtures/oracle/circles.json   generated  python -m umbra_oracle fixtures --seed 7
-crates/umbra-forward/tests/fixtures/oracle/triangle.json  generated  python -m umbra_oracle fixtures --seed 7
+crates/umbra-forward/tests/fixtures/oracle/box.json          generated  python -m umbra_oracle fixtures --seed 7
+crates/umbra-forward/tests/fixtures/oracle/circles.json      generated  python -m umbra_oracle fixtures --seed 7
+crates/umbra-forward/tests/fixtures/oracle/triangle.json     generated  python -m umbra_oracle fixtures --seed 7
+crates/umbra-forward/tests/fixtures/oracle/ellipse_fine.json generated  python -m umbra_oracle fixtures --seed 7
+crates/umbra-forward/tests/fixtures/oracle/prism_fine.json   generated  python -m umbra_oracle fixtures --seed 7
