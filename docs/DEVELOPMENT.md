@@ -80,9 +80,33 @@ subcommands. Their outputs are versioned assets checked into
 
 ```bash
 cargo run -p umbra-cli -- gen-flux            # writes flux.bin + manifest.json
-cargo run -p umbra-cli -- selftest           # build a scene, evaluate L1, check the adjoint
+cargo run -p umbra-cli -- scene              # load, validate and report the default scene
+cargo run -p umbra-cli -- golden             # regenerate the golden dataset
+cargo run -p umbra-cli -- selftest           # load the default scene, evaluate L1, check the adjoint
 cargo run -p umbra-cli --release -- bench    # build + forward-model timings
 ```
+
+### The default scene and its golden dataset
+
+The shared scene lives in `web/src/scenes/default.json` in the format spec §8.1
+fixes, and every solver reconstructs the same data derived from it. The loader
+is `umbra_forward::scene::SceneSpec`, and it is strict on purpose: unknown keys
+are rejected, unit strings are checked, and geometry that lies outside the voxel
+grid fails to load rather than being silently invisible to the forward model.
+
+The golden dataset in `crates/umbra-recon/tests/golden/default.json` records the
+density field, `λ`, the sampled counts and a SHA-256 of those counts. It is
+loaded by `crates/umbra-recon/tests/common` and pinned in two places:
+
+```bash
+cargo run -p umbra-cli -- golden            # rewrite it after an intended change
+cargo test -p umbra-cli golden              # fails when the committed copy is stale
+```
+
+`cargo test -p umbra-recon` additionally re-derives `λ` and the counts from the
+committed scene, so a physics change that moves any count cannot pass without the
+golden being regenerated and reviewed. A diff in the golden is a change to every
+reconstruction in the app: review it as physics, not as fixture churn.
 
 ### Oracle fixtures
 

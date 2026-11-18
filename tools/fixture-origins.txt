@@ -20,3 +20,8 @@ crates/umbra-forward/tests/fixtures/oracle/circles.json      generated  python -
 crates/umbra-forward/tests/fixtures/oracle/triangle.json     generated  python -m umbra_oracle fixtures --seed 7
 crates/umbra-forward/tests/fixtures/oracle/ellipse_fine.json generated  python -m umbra_oracle fixtures --seed 7
 crates/umbra-forward/tests/fixtures/oracle/prism_fine.json   generated  python -m umbra_oracle fixtures --seed 7
+
+# The shared default scene's golden dataset: the density, lambda and counts that
+# every solver reconstructs (spec §11.1). Regenerated from the committed scene by
+# `cargo run -p umbra-cli -- golden`; the CLI test fails when it is stale.
+crates/umbra-recon/tests/golden/default.json  generated  cargo run -p umbra-cli -- golden

@@ -18,10 +18,12 @@
 //! | [`primitive`] | boxes, ellipsoids, capsules and 2-D prisms |
 //! | [`rng`] | counter-based Philox streams and Poisson/binomial sampling |
 //! | [`hash`] | SHA-256 for asset manifest integrity |
+//! | [`json`] | a dependency-free JSON reader/writer for scene documents |
 
 pub mod csr;
 pub mod grid;
 pub mod hash;
+pub mod json;
 pub mod linear;
 pub mod primitive;
 pub mod rng;
@@ -29,6 +31,7 @@ pub mod rng;
 pub use csr::Csr;
 pub use grid::{Grid2, Grid3, GridAny};
 pub use hash::{sha256, sha256_hex};
+pub use json::{parse as parse_json, Json};
 pub use linear::{dot_product_test, LinearOperator};
 pub use primitive::{Primitive, Quat};
 pub use rng::{stream_id, Philox};
