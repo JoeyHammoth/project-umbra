@@ -17,13 +17,15 @@
 //! | Different stream | statistically independent sequence |
 //! | Any output position | reachable directly (`Stream::at`), without drawing predecessors |
 //!
-//! # Known gap
+//! # Known-answer parity
 //!
-//! The published known-answer vectors (Random123 `tests/kat_vectors`) are not
-//! bundled offline, so this module is tested for the properties above and for
-//! its distribution, not against the reference file. Until that file is added,
-//! the algorithm is "Philox-4x32-10 by construction", not "verified against
-//! Random123". See the roadmap ticket for the parity check.
+//! The three published Random123 `tests/kat_vectors` entries for
+//! `philox4x32 10` are transcribed into the tests below: the all-zero input,
+//! the all-ones input, and the π-digit counter/key pair. They are the
+//! reference answers rather than values produced here, so a wrong multiplier,
+//! round count or key-bump order fails the first line. The block function they
+//! exercise is the same one [`Philox::refill`] calls, which is what makes the
+//! parity claim cover the streams the simulator actually consumes.
 
 /// Philox-4x32 round multiplier, first pair.
 const M0: u32 = 0xD251_1F53;
@@ -55,6 +57,21 @@ fn round(ctr: &mut [u32; 4], key: &mut [u32; 2]) {
     ctr[3] = lo0;
     key[0] = key[0].wrapping_add(W0);
     key[1] = key[1].wrapping_add(W1);
+}
+
+/// The Philox-4x32-10 block function: a 128-bit counter and a 64-bit key in,
+/// 128 bits out, with no state carried between calls.
+///
+/// This is the unit the published known-answer vectors specify, and the one
+/// [`Philox::refill`] calls, so testing it is testing the generator rather than
+/// a parallel reimplementation of it.
+fn philox_block(ctr: [u32; 4], key: [u32; 2]) -> [u32; 4] {
+    let mut ctr = ctr;
+    let mut key = key;
+    for _ in 0..ROUNDS {
+        round(&mut ctr, &mut key);
+    }
+    ctr
 }
 
 /// A counter-based stream: the counter is `(stream, block)` and the key is the
@@ -99,20 +116,16 @@ impl Philox {
 
     /// Fills the internal batch from the current block and advances.
     fn refill(&mut self) {
-        let mut ctr = [
+        // Philox's counter is 4×32 = 128 bits. The low 64 carry the block index
+        // and the high 64 are a fixed domain tag, which keeps block 0 of every
+        // stream clear of anything a caller might reconstruct by hand.
+        let ctr = [
             self.block as u32,
             (self.block >> 32) as u32, // hi/lo of the block counter
             0x0BAD_5EED,
             0xA5A5_5A5A,
         ];
-        // Philox's counter is 4×32 = 128 bits; using the low 64 for the block
-        // index and constants for the high 64 keeps streams disjoint in
-        // practice while staying reproducible on every platform.
-        let mut key = self.key;
-        for _ in 0..ROUNDS {
-            round(&mut ctr, &mut key);
-        }
-        self.batch = ctr;
+        self.batch = philox_block(ctr, self.key);
         self.next = 0;
         self.block = self.block.wrapping_add(1);
     }
@@ -276,6 +289,49 @@ pub fn stream_id(scene_key: u64, task: u32, index: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Random123 `tests/kat_vectors`, the `philox4x32 10` rows: counter, key,
+    /// expected output. Transcribed from the reference file, never regenerated
+    /// from this implementation.
+    #[test]
+    fn matches_random123_known_answers() {
+        let vectors: [([u32; 4], [u32; 2], [u32; 4]); 3] = [
+            (
+                [0x0000_0000; 4],
+                [0x0000_0000; 2],
+                [0x6627_e8d5, 0xe169_c58d, 0xbc57_ac4c, 0x9b00_dbd8],
+            ),
+            (
+                [0xFFFF_FFFF; 4],
+                [0xFFFF_FFFF; 2],
+                [0x408f_276d, 0x41c8_3b0e, 0xa20b_c7c6, 0x6d54_51fd],
+            ),
+            (
+                // Counter = the first four words of π, key = the next two.
+                [0x243f_6a88, 0x85a3_08d3, 0x1319_8a2e, 0x0370_7344],
+                [0xa409_3822, 0x299f_31d0],
+                [0xd16c_fe09, 0x94fd_cceb, 0x5001_e420, 0x2412_6ea1],
+            ),
+        ];
+        for (index, (ctr, key, expected)) in vectors.iter().enumerate() {
+            assert_eq!(
+                philox_block(*ctr, *key),
+                *expected,
+                "Random123 vector {index}: ctr {ctr:?} key {key:?}"
+            );
+        }
+    }
+
+    /// A snapshot, not a correctness claim: it records how [`Philox::new`] maps
+    /// `(seed, stream)` onto the block function's counter and key. A change to
+    /// that layout would silently rerun every published scene with different
+    /// numbers, so it should be a deliberate, reviewable edit.
+    #[test]
+    fn stream_layout_is_pinned() {
+        let mut rng = Philox::new(0, 0);
+        let first: [u32; 4] = std::array::from_fn(|_| rng.next_u32());
+        assert_eq!(first, [0x9932_2c13, 0xda7d_8d49, 0x564d_862d, 0x1ec7_8549]);
+    }
 
     #[test]
     fn same_seed_and_stream_reproduce() {
