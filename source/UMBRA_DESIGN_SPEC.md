@@ -140,11 +140,15 @@ $$E_{\min}(X)=\frac{a}{b}\left(e^{bX}-1\right).$$
 
 Default constants for standard rock: $a\approx 2.0\times10^{-3}$ GeV cm² g⁻¹, $b\approx 4\times10^{-6}$ cm² g⁻¹ (critical energy $a/b\approx$ a few hundred GeV). The app can alternatively load tabulated range data (Groom–Mokhov–Striganov) generated offline (§6).
 
-**Surface flux.** Modified Gaisser parametrisation with the large-angle correction of Guan et al. (2015):
+**Surface flux.** Modified Gaisser parametrisation of Guan et al. (2015), arXiv:1509.06176 Eq. 3, with the Earth-curvature effective angle of Eq. 2:
 
-$$I(E,\theta)=0.14\,E^{-2.7}\left[\frac{1}{1+\frac{1.1E\cos\theta^*}{115}}+\frac{0.054}{1+\frac{1.1E\cos\theta^*}{850}}\right],$$
+$$I(E,\theta)=0.14\left[E\left(1+\frac{3.64}{E\,(\cos\theta^*)^{1.29}}\right)\right]^{-2.7}\left[\frac{1}{1+\frac{1.1E\cos\theta^*}{115}}+\frac{0.054}{1+\frac{1.1E\cos\theta^*}{850}}\right],$$
 
-with $E$ in GeV and $\cos\theta^*$ the effective-angle correction. *(Implementation note: transcribe the coefficients directly from the paper and unit-test against its published curves; do not rely on memory.)*
+$$\cos\theta^*=\frac{\sqrt{\cos^2\theta+P_1^2+P_2\cos^{P_3}\theta+P_4\cos^{P_5}\theta}}{\sqrt{1+P_1^2+P_2+P_4}},$$
+
+with $E$ in GeV and $P_1\ldots P_5 = 0.102573,\,-0.068287,\,0.958633,\,0.0407253,\,0.817285$.
+
+> **Correction, v0.3.** v0.1 printed Gaisser's *original* formula (Eq. 1 of the same paper) while calling it the Guan modification, and omitted the curvature angle. The bracket above **multiplies** the energy: writing it as a division inverts the low-energy spectrum and raises the vertical flux by two orders of magnitude. Both errors were caught by the 70 m⁻² s⁻¹ sr⁻¹ anchor at 1 GeV, which is why that anchor is a test and not a comment (spec §10.2). The implementation reproduces the anchor at 60 m⁻² s⁻¹ sr⁻¹ and an independent quadrature to 0.08%.
 
 **Integral intensity table.** $\Phi(>E,\theta)$ is precomputed offline on a $(\log E,\cos\theta)$ grid and bilinearly interpolated in log space at runtime (§6.2). Closed-form derivatives follow from the fundamental theorem of calculus:
 
@@ -1303,6 +1307,7 @@ Flux and ranges: Gaisser (1990); Guan et al. (2015); Groom, Mokhov & Striganov (
 |---|---|---|
 | v0.1 | 2026-11-18 | §1–§5: vision, physics, algorithm portfolio, architecture, compute core |
 | v0.2 | 2026-11-18 | §6–§14 written: offline tooling and oracle, front end, data and assets, build and hosting, testing and calibration, roadmap, risks, repository and portfolio, appendices. §9.7 records the coupled-dependency rule after `vite` 8 and `@vitejs/plugin-react` 6 each failed `npm install` alone; §11 is reconciled with the shipped M0 state |
+| v0.3 | 2026-11-18 | §2.3 corrected: the flux is Guan et al. Eq. 3 (energy **multiplied** by the low-energy bracket, plus the curvature effective angle), not Gaisser's original Eq. 1. With the fix the table agrees with an independent quadrature to 0.08% and reproduces the 70 m⁻² s⁻¹ sr⁻¹ anchor at 1 GeV. §2.1's "about 1% transmission" is clarified as the ~75 m regime (≈70% at 3.8 m) |
 
 **Known gaps, stated rather than implied:**
 

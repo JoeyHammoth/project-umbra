@@ -1,6 +1,6 @@
 //! The discretised experiment.
 
-use umbra_core::{Csr, GridAny};
+use umbra_core::{Csr, GridAny, LinearOperator};
 
 /// One ray cell: a detector, a direction and the acceptance factor that scales
 /// its expected counts.
@@ -29,6 +29,26 @@ pub struct System {
     pub rays: Vec<RayCell>,
     /// The voxel grid the columns refer to.
     pub grid: GridAny,
+}
+
+impl LinearOperator for System {
+    fn nrows(&self) -> usize {
+        self.l.nrows()
+    }
+
+    fn ncols(&self) -> usize {
+        // The grid size, not the largest column index: trailing voxels that no
+        // ray touches are still unknowns in the inverse problem.
+        self.grid.cell_count()
+    }
+
+    fn apply(&self, x: &[f32], y: &mut [f32]) {
+        self.l.matvec(x, y);
+    }
+
+    fn apply_t(&self, y: &[f32], x: &mut [f32]) {
+        self.l.matvec_t(y, x);
+    }
 }
 
 impl System {

@@ -9,6 +9,9 @@ target/
 
 # Web
 node_modules/
+
+# Python virtualenv for the reference oracle and table checks
+.venv/
 dist/
 .vite/
 

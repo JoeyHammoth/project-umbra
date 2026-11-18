@@ -11,17 +11,22 @@
 //! | L1 | Gaisser flux with Guan et al. large-angle correction, CSDA range–energy |
 //! | L2 | L1 plus Highland multiple-scattering blur and a soft-particle background |
 //!
-//! Only the range–energy relation and the constants are implemented so far;
-//! flux tables arrive with the offline table generator (see the roadmap).
+//! The flux parametrisation and its table are in [`flux`]; the exposure
+//! simulator is in [`simulate`]. The forward model itself lives in
+//! `umbra-forward`, because it needs the ray-cell metadata that crate owns.
 
 pub mod constants;
 pub mod detector;
 pub mod flux;
 pub mod range;
+pub mod simulate;
 
 pub use constants::{STANDARD_ROCK_A, STANDARD_ROCK_B, STANDARD_ROCK_RHO, STANDARD_ROCK_X0};
 pub use detector::{AngularBinning, Detector, Pose};
-pub use flux::FluxTable;
+pub use flux::{
+    cos_theta_star, gaisser_guan_diff, generate_default, integral_flux, FluxTable, TableError,
+    TABLE_VERSION,
+};
 pub use range::{de_min_dx, e_min};
 
 /// Which forward-model fidelity to evaluate.
