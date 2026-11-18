@@ -39,7 +39,7 @@ box, prism and ellipsoid targets; MC counts agree with `λ_i` by a χ² test.
 **Deliverable:** A1–A4 reconstruct the same simulated dataset, side by side, in
 the Lab.
 
-- A1 transmission EM baseline (L0)
+- [x] A1 transmission EM baseline (L0)
 - A2 nonlinear Poisson MAP with L-BFGS-B and Huber TV
 - A3 opacity inversion + PDHG
 - A4 one-sided sparse deviation with FISTA
