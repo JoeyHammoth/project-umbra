@@ -1,0 +1,10 @@
+{
+  "schema": "umbra.assets/1",
+  "asset": "tables",
+  "version": 1,
+  "files": [
+    { "path": "flux.bin", "bytes": 34120, "sha256": "064073c708d1ef9727963effb7d614cceb74c705603fdceacc10970dba8bb4b7" }
+  ],
+  "grid": { "n_e": 129, "n_cos": 33 },
+  "citation": "Gaisser (1990); Guan et al. (2015) arXiv:1509.06176 Eq. 3"
+}
