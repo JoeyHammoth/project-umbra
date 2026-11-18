@@ -42,6 +42,13 @@ catches up, and any claim that its objective decreases monotonically would be
 false. What is guaranteed is the gap, which is why it is what the solver reports
 and what the test asserts.
 
+Its exit criterion is therefore stated about the best iterate rather than every
+iterate (#12, re-scoped): the best objective the solver visits is at least two
+orders of magnitude below its start, the final iterate stays within a factor of
+ten of that best, and the gap falls and stays non-negative. The rise count is
+still printed on every test run, so the non-monotonicity is a measured number in
+the log rather than a claim nobody checks.
+
 The scene has one detector, so its 32 rays are a single view. That is enough to
 compare solvers and not enough to test ordered-subset acceleration, which needs
 several distinct views to alternate between — the criterion in #10 is re-scoped
