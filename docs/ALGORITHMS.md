@@ -15,7 +15,7 @@ data, with each method's failure mode visible. ★ marks the distinctive items.
 | A8 ★ | Sequential GLR / mixture-SPRT, `t_5σ ≈ 25/r` | `umbra-stats` | `time_to_five_sigma` implemented |
 | A9 ★ | Bayesian-optimal design, monotone-submodular greedy placement | `umbra-design` | utility + greedy implemented, no Asimov oracle yet |
 | A10 ★ | Fisher sensitivity, local PSF, stochastic probing, Lanczos modes, coverage roses | `umbra-vis` | Fisher diagonal implemented |
-| A11 | Laplace/Fisher covariance, parametric bootstrap, SBC | `umbra-stats` | not started |
+| A11 | Laplace/Fisher covariance, parametric bootstrap, SBC | `umbra-stats` | Fisher σ map implemented; bootstrap and SBC next |
 | A12 | Event-level muon Monte Carlo | `umbra-physics` | not started |
 | A13 ★ | Amortised SBI (NPE) via ONNX, validated with SBC/TARP | offline + `umbra-infer` | not started (stretch) |
 
@@ -68,6 +68,38 @@ small cavity in a known structure — and a portfolio where each member wins
 somewhere is more useful than one whose favourite wins everywhere. The test
 asserts the first result and records the second rather than dropping the scene
 that disagrees.
+
+**A11, error bars.** The Laplace approximation needs the curvature of the
+posterior at the estimate, and for this likelihood the data part is the Fisher
+information `F = Lᵀ diag((∂λ/∂X)²/λ) L` — two sparse products with the operator
+every solver already holds, so `F` is never assembled. Per-voxel σ is the
+diagonal of `(F + C + 1/σ_level²)⁻¹`, obtained by one conjugate-gradient solve
+per voxel rather than by inverting anything: at 1024² the inverse is already
+4 MB, and the grid grows. The CG diagonal agrees with a dense Gauss–Jordan
+inverse on a coupled four-voxel system to `1e-4` relative, and on independent
+Poisson cells the intervals cover the truth at the rate they claim — the test
+measures coverage over 3200 intervals and requires it inside 64–72%, with the
+predicted σ within 7% of the empirical spread of the estimates.
+
+Two choices are physics rather than numerics. **A voxel no ray responds to is
+reported unconstrained**, not given a σ: on the shared 32-ray scene **383 of
+1024 voxels are never traversed**, and their variance would otherwise be
+whatever the prior asserted. And the prior curvature is TV's *quadratic
+majoriser*, `β/ε` on every edge, not the exact Hessian — the exact Hessian is
+zero across every detected edge, which leaves the precision near-singular at
+exactly the features the bars are meant to describe (measured: every column hit
+its iteration cap, residual above `10²`). The majoriser keeps the prior's
+statement and slightly understates σ at a sharp boundary, which is stated here
+because it is the one place the bars are deliberately not the exact Laplace
+answer.
+
+TV alone cannot make the problem invertible: a constant offset changes no edge
+difference, so the uniform field is an exact null direction and the effective
+condition number leaves f64 (a diverging CG residual, not a slow one). A level
+prior of ±0.5 g cm⁻³ on the mean density constrains that one direction and
+nothing else; it is a statement about the scene, so it is a configuration value.
+The result card is `umbra_recon::ResultCard`, which also reports when its bars
+did not converge, so a UI can show the estimate without inventing an interval.
 
 The scene has one detector, so its 32 rays are a single view. That is enough to
 compare solvers and not enough to test ordered-subset acceleration, which needs

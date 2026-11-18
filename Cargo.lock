@@ -159,6 +159,7 @@ dependencies = [
  "umbra-core",
  "umbra-forward",
  "umbra-physics",
+ "umbra-stats",
 ]
 
 [[package]]

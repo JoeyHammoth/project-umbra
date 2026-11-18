@@ -5,6 +5,12 @@
 //! is the Asimov test statistic, because both the detection scan and the
 //! experiment-design utilities are expressed in terms of it.
 
+pub mod laplace;
+
+pub use laplace::{
+    poisson_laplace, GraphCurvature, LaplaceConfig, PoissonProblem, SigmaMap, Uncertainty,
+};
+
 /// Median expected significance of `H1` against `H0`, as a `Z` value.
 ///
 /// Evaluates the Asimov test statistic
