@@ -1,0 +1,8 @@
+* text=auto eol=lf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.pdf binary
+*.wasm binary
+*.onnx binary
