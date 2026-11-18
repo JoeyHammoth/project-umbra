@@ -1,0 +1,12 @@
+[package]
+name = "umbra-stats"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Detection statistics, Asimov significance, look-elsewhere correction and uncertainty for UMBRA"
+
+[dependencies]
+umbra-core.workspace = true
+umbra-forward.workspace = true
+umbra-physics.workspace = true

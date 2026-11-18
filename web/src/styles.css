@@ -1,0 +1,109 @@
+:root {
+  color-scheme: dark;
+  --bg: #08090d;
+  --panel: #101319;
+  --ink: #e8edf5;
+  --muted: #8b98ab;
+  --accent: #f2c14e;
+  --rule: #1d2430;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at 20% 0%, #16202e 0%, var(--bg) 55%);
+  color: var(--ink);
+  min-height: 100vh;
+}
+
+.shell {
+  max-width: 54rem;
+  margin: 0 auto;
+  padding: 4rem 1.5rem 6rem;
+  line-height: 1.6;
+}
+
+.eyebrow {
+  margin: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+h1 {
+  margin: 0.2rem 0 0.6rem;
+  font-size: clamp(2.6rem, 8vw, 4.2rem);
+  letter-spacing: 0.14em;
+  font-weight: 300;
+}
+
+.lede {
+  font-size: 1.05rem;
+  color: var(--muted);
+  max-width: 42rem;
+}
+
+section {
+  margin-top: 3rem;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+}
+
+h2 {
+  margin-top: 0;
+  font-size: 1.1rem;
+  letter-spacing: 0.04em;
+}
+
+ol.stages {
+  list-style: none;
+  margin: 1.25rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+ol.stages li {
+  display: grid;
+  grid-template-columns: 12rem 1fr;
+  gap: 1rem;
+  border-top: 1px solid var(--rule);
+  padding-top: 0.55rem;
+}
+
+.kind {
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 0.82rem;
+  color: var(--accent);
+}
+
+.detail {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+footer {
+  margin-top: 3rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+code {
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 0.85em;
+  color: #cfe3ff;
+}
+
+@media (max-width: 34rem) {
+  ol.stages li {
+    grid-template-columns: 1fr;
+    gap: 0.15rem;
+  }
+}

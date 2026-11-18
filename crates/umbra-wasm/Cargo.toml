@@ -1,0 +1,21 @@
+[package]
+name = "umbra-wasm"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Thin wasm-bindgen facade over the UMBRA compute core"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+umbra-core.workspace = true
+umbra-physics.workspace = true
+umbra-forward.workspace = true
+umbra-recon.workspace = true
+umbra-stats.workspace = true
+umbra-infer.workspace = true
+umbra-design.workspace = true
+umbra-vis.workspace = true
+wasm-bindgen.workspace = true

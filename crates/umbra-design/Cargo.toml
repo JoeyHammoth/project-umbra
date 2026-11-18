@@ -1,0 +1,13 @@
+[package]
+name = "umbra-design"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Experimental design: Asimov utilities and greedy detector placement for UMBRA"
+
+[dependencies]
+umbra-core.workspace = true
+umbra-forward.workspace = true
+umbra-physics.workspace = true
+umbra-stats.workspace = true
