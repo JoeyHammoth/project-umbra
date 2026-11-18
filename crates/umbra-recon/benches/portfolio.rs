@@ -24,9 +24,11 @@ use std::time::{Duration, Instant};
 
 use umbra_forward::expected::ForwardParams;
 use umbra_forward::scene::SceneSpec;
-use umbra_forward::{build_system_2d, expected, System};
+use umbra_forward::{build_system_2d, expected};
 use umbra_physics::{generate_default, Fidelity, FluxTable};
-use umbra_recon::{A1Config, Control, Solver, StepReport, TransmissionEm};
+use umbra_recon::{
+    A1Config, A2Config, Control, PoissonMap, Problem, Solver, StepReport, TransmissionEm,
+};
 
 /// The data-fit level every solver is timed to, in NLL.
 ///
@@ -41,7 +43,7 @@ const STEP_BUDGET: u32 = 2_000;
 
 /// The shared scene at L0, the counts its own model predicts, and the model.
 struct Data {
-    system: System,
+    system: umbra_forward::System,
     counts: Vec<f32>,
     flux: FluxTable,
     params: ForwardParams,
@@ -49,38 +51,20 @@ struct Data {
 }
 
 impl Data {
-    /// `λ(ρ)` for the shared scene at L0.
-    fn lambda(&self, rho: &[f32]) -> Vec<f32> {
-        expected(
+    fn problem(&self) -> Problem<'_> {
+        Problem::new(
             &self.system,
-            rho,
+            &self.counts,
             &self.flux,
             Fidelity::L0,
             self.exposure_s,
-            &self.params,
+            self.params,
         )
-        .lambda
     }
 
-    /// Poisson NLL of an estimate, up to the constant `Σ ln y_i!`.
+    /// Poisson NLL of an estimate under the shared scene's L0 model.
     fn nll(&self, rho: &[f32]) -> f64 {
-        self.lambda(rho)
-            .iter()
-            .zip(&self.counts)
-            .map(|(lambda, counts)| {
-                let lambda = f64::from(*lambda);
-                let counts = f64::from(*counts);
-                if lambda > 0.0 {
-                    lambda - counts * lambda.ln()
-                } else if counts > 0.0 {
-                    // Counts against zero acceptance: impossible data, and the
-                    // infinite fit is the honest description of it.
-                    f64::INFINITY
-                } else {
-                    0.0
-                }
-            })
-            .sum()
+        self.problem().nll(rho)
     }
 }
 
@@ -116,8 +100,9 @@ fn dataset(scene: &SceneSpec) -> Data {
 
 /// A solver with its config and type erased, so one loop can hold the portfolio.
 ///
-/// [`Solver`] itself is not object-safe — `init` is generic over the config —
-/// but stepping and reading the estimate are, which is all a benchmark needs.
+/// [`Solver`] itself is not object-safe — `init` is generic over the config and
+/// the starting point — but stepping and reading the estimate are, which is all
+/// a benchmark needs.
 trait Stepper {
     fn step(&mut self, ctl: &Control) -> StepReport;
     fn estimate(&self) -> &[f32];
@@ -134,7 +119,7 @@ impl<S: Solver> Stepper for S {
 }
 
 /// One portfolio entry: an id and a way to build it from the shared data.
-type Factory = Box<dyn Fn(&System, &[f32]) -> Box<dyn Stepper>>;
+type Factory = Box<dyn Fn(&Data) -> Box<dyn Stepper>>;
 
 struct Entry {
     id: &'static str,
@@ -147,12 +132,17 @@ fn portfolio(scene: &SceneSpec) -> Vec<Entry> {
         subsets: 8,
         ..A1Config::from_scene(scene)
     };
-    vec![Entry {
-        id: "a1-transmission-em",
-        make: Box::new(move |system, counts| {
-            Box::new(TransmissionEm::new(system, counts, a1.clone()))
-        }),
-    }]
+    let a2 = A2Config::from_scene(scene);
+    vec![
+        Entry {
+            id: "a1-transmission-em",
+            make: Box::new(move |data| Box::new(TransmissionEm::new(&data.problem(), a1.clone()))),
+        },
+        Entry {
+            id: "a2-poisson-map",
+            make: Box::new(move |data| Box::new(PoissonMap::new(&data.problem(), a2.clone()))),
+        },
+    ]
 }
 
 fn ms(duration: Duration) -> f64 {
@@ -169,7 +159,7 @@ fn median(mut samples: Vec<Duration>) -> Duration {
 fn step_cost(data: &Data, entry: &Entry, runs: u32) -> Duration {
     let mut samples = Vec::with_capacity(runs as usize);
     for _ in 0..runs {
-        let mut solver = (entry.make)(&data.system, &data.counts);
+        let mut solver = (entry.make)(data);
         let ctl = Control::new(1, 1);
         let started = Instant::now();
         solver.step(&ctl);
@@ -186,7 +176,7 @@ struct Reached {
 }
 
 fn to_target(data: &Data, entry: &Entry) -> Reached {
-    let mut solver = (entry.make)(&data.system, &data.counts);
+    let mut solver = (entry.make)(data);
     let ctl = Control::new(STEP_BUDGET, 1);
     let started = Instant::now();
     let mut steps = 0;

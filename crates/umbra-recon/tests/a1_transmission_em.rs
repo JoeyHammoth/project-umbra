@@ -10,31 +10,64 @@
 mod common;
 
 use umbra_core::Grid2;
-use umbra_forward::{build_system_2d, expected, Scene2D, System};
-use umbra_physics::{generate_default, AngularBinning, Detector, Fidelity, Pose};
-use umbra_recon::{A1Config, Control, Solver, TransmissionEm};
+use umbra_forward::{build_system_2d, expected, ForwardParams, Scene2D, System};
+use umbra_physics::{generate_default, AngularBinning, Detector, Fidelity, FluxTable, Pose};
+use umbra_recon::{A1Config, Control, Problem, Solver, TransmissionEm};
 
-/// The committed scene at L0, with counts equal to its own expectation.
-fn default_l0() -> (System, Vec<f32>, Vec<f32>, A1Config) {
+/// The committed scene at L0: the system, its own predicted counts, and the
+/// physics that produced them, kept alive so a [`Problem`] can borrow it.
+struct Fixture {
+    system: System,
+    counts: Vec<f32>,
+    cfg: A1Config,
+    flux: FluxTable,
+    exposure_s: f32,
+    params: ForwardParams,
+}
+
+impl Fixture {
+    fn problem(&self) -> Problem<'_> {
+        Problem::new(
+            &self.system,
+            &self.counts,
+            &self.flux,
+            Fidelity::L0,
+            self.exposure_s,
+            self.params,
+        )
+    }
+}
+
+fn default_l0() -> Fixture {
     let golden = common::load();
     let system = build_system_2d(&golden.scene.to_scene_2d());
 
     let mut scene = golden.scene.clone();
     scene.physics.level = Fidelity::L0;
-    let model = expected(
+    let flux = generate_default();
+    let params = scene.forward_params();
+    let counts = expected(
         &system,
         &golden.density,
-        &generate_default(),
+        &flux,
         Fidelity::L0,
         scene.exposure_s,
-        &scene.forward_params(),
-    );
+        &params,
+    )
+    .lambda;
 
     let cfg = A1Config {
         subsets: 8,
         ..A1Config::from_scene(&scene)
     };
-    (system, model.lambda, golden.density, cfg)
+    Fixture {
+        system,
+        counts,
+        cfg,
+        flux,
+        exposure_s: scene.exposure_s,
+        params,
+    }
 }
 
 /// Worst per-ray relative difference between the model and the data.
@@ -48,8 +81,8 @@ fn misfit(solver: &TransmissionEm, counts: &[f32]) -> f64 {
 }
 
 /// Runs at most `steps` steps, returning the objective after each.
-fn objectives(system: &System, counts: &[f32], cfg: &A1Config, steps: u32) -> Vec<f64> {
-    let mut solver = TransmissionEm::new(system, counts, cfg.clone());
+fn objectives(problem: &Problem<'_>, cfg: &A1Config, steps: u32) -> Vec<f64> {
+    let mut solver = TransmissionEm::new(problem, cfg.clone());
     let ctl = Control::new(steps, 1);
     let mut seen = Vec::new();
     for _ in 0..steps {
@@ -64,8 +97,9 @@ fn objectives(system: &System, counts: &[f32], cfg: &A1Config, steps: u32) -> Ve
 
 #[test]
 fn the_objective_never_increases_on_the_default_scene() {
-    let (system, counts, _, cfg) = default_l0();
-    let mut solver = TransmissionEm::new(&system, &counts, cfg.clone());
+    let fixture = default_l0();
+    let problem = fixture.problem();
+    let mut solver = TransmissionEm::new(&problem, fixture.cfg.clone());
     let start = solver.objective();
     let ctl = Control::new(50, 1);
     let mut seen = vec![start];
@@ -94,16 +128,17 @@ fn the_objective_never_increases_on_the_default_scene() {
 
 #[test]
 fn the_fit_improves_steadily_on_the_default_scene() {
-    let (system, counts, _, cfg) = default_l0();
-    let mut solver = TransmissionEm::new(&system, &counts, cfg);
-    let initial = misfit(&solver, &counts);
+    let fixture = default_l0();
+    let problem = fixture.problem();
+    let mut solver = TransmissionEm::new(&problem, fixture.cfg.clone());
+    let initial = misfit(&solver, &fixture.counts);
     let ctl = Control::new(200, 1);
     for _ in 0..200 {
         if solver.step(&ctl).converged {
             break;
         }
     }
-    let final_misfit = misfit(&solver, &counts);
+    let final_misfit = misfit(&solver, &fixture.counts);
 
     // An exact fit is not claimed: with 32 ray cells against 1024 voxels the
     // problem is massively underdetermined, and the estimate is projected at
@@ -130,21 +165,20 @@ fn the_fit_improves_steadily_on_the_default_scene() {
 fn ordered_subsets_reach_the_same_solution() {
     // The subset partition must not change the problem, only the path to it:
     // after enough steps both settings must land on the same objective.
-    let (system, counts, _, cfg) = default_l0();
+    let fixture = default_l0();
+    let problem = fixture.problem();
     let mut full = TransmissionEm::new(
-        &system,
-        &counts,
+        &problem,
         A1Config {
             subsets: 1,
-            ..cfg.clone()
+            ..fixture.cfg.clone()
         },
     );
     let mut subsets = TransmissionEm::new(
-        &system,
-        &counts,
+        &problem,
         A1Config {
             subsets: 4,
-            ..cfg.clone()
+            ..fixture.cfg.clone()
         },
     );
     let ctl = Control::new(400, 1);
@@ -214,22 +248,24 @@ fn it_recovers_a_three_voxel_void_from_noiseless_counts() {
     }
 
     let exposure = 1.0e6f32;
-    let model = expected(
+    let flux = generate_default();
+    let params = ForwardParams::default();
+    let model = expected(&system, &truth, &flux, Fidelity::L0, exposure, &params);
+    let problem = Problem::new(
         &system,
-        &truth,
-        &generate_default(),
+        &model.lambda,
+        &flux,
         Fidelity::L0,
         exposure,
-        &umbra_forward::ForwardParams::default(),
+        params,
     );
     let cfg = A1Config {
-        exposure_s: exposure,
         rho_init: bulk,
         rho_max: 4.0,
         ..A1Config::default()
     };
 
-    let mut solver = TransmissionEm::new(&system, &model.lambda, cfg);
+    let mut solver = TransmissionEm::new(&problem, cfg);
     let ctl = Control::new(400, 1);
     for _ in 0..400 {
         if solver.step(&ctl).converged {
@@ -260,8 +296,9 @@ fn it_recovers_a_three_voxel_void_from_noiseless_counts() {
 
 #[test]
 fn cancellation_between_subsets_leaves_the_estimate_where_it_was() {
-    let (system, counts, _, cfg) = default_l0();
-    let mut solver = TransmissionEm::new(&system, &counts, cfg);
+    let fixture = default_l0();
+    let problem = fixture.problem();
+    let mut solver = TransmissionEm::new(&problem, fixture.cfg.clone());
     let ctl = Control::new(50, 1);
     solver.step(&ctl);
     let before: Vec<f32> = solver.estimate().to_vec();
@@ -292,12 +329,21 @@ fn the_committed_golden_dataset_stays_stable_under_the_l0_model() {
     let (system, _, counts) = common::system_and_counts();
     assert_eq!(golden.lambda.len(), system.ray_count());
     let counts: Vec<f32> = counts.iter().map(|count| *count as f32).collect();
+    let flux = generate_default();
+    let problem = Problem::new(
+        &system,
+        &counts,
+        &flux,
+        Fidelity::L0,
+        golden.exposure_s,
+        golden.scene.forward_params(),
+    );
     let cfg = A1Config {
         subsets: 8,
         ..A1Config::from_scene(&golden.scene)
     };
 
-    let seen = objectives(&system, &counts, &cfg, 200);
+    let seen = objectives(&problem, &cfg, 200);
     for (step, pair) in seen.windows(2).enumerate() {
         assert!(
             pair[1] <= pair[0],
@@ -305,7 +351,7 @@ fn the_committed_golden_dataset_stays_stable_under_the_l0_model() {
         );
     }
 
-    let mut solver = TransmissionEm::new(&system, &counts, cfg.clone());
+    let mut solver = TransmissionEm::new(&problem, cfg.clone());
     let ctl = Control::new(200, 1);
     for _ in 0..200 {
         if solver.step(&ctl).converged {

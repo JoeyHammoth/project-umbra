@@ -6,7 +6,7 @@ data, with each method's failure mode visible. ★ marks the distinctive items.
 | ID | Method | Crate | Status |
 |---|---|---|---|
 | A1 | Transmission EM family (Lange–Carson, OSTR, SPS) | `umbra-recon` | `TransmissionEm` implemented (L0), ordered subsets with a monotone guard |
-| A2 | Nonlinear Poisson MAP + Huber TV, L-BFGS-B, box constraints | `umbra-recon` | not started |
+| A2 | Nonlinear Poisson MAP + Huber TV, L-BFGS-B, box constraints | `umbra-recon` | `PoissonMap` implemented: projected L-BFGS over Huber TV, L0 and L1 |
 | A3 | Opacity-domain inversion + Chambolle–Pock PDHG with TV | `umbra-recon` | not started |
 | A4 ★ | Reference-anchored one-sided sparse deviation (FISTA) | `umbra-recon` | not started |
 | A5 | Plug-and-play with a learned denoiser (ONNX) | `umbra-recon` + web worker | not started (stretch) |
