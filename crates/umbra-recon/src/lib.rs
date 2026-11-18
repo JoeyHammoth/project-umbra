@@ -92,6 +92,32 @@ impl SolverKind {
     }
 }
 
+/// What a solver starts from, beyond the data and its configuration.
+///
+/// `Default` means the solver's own starting point, which for every method here
+/// is the scene's bulk density. A caller that already has an estimate passes it
+/// here instead — a warm start from a cheaper solver, or the refinement pass
+/// after a slider moves — and the solver begins from it rather than discarding
+/// it.
+///
+/// This is a parameter rather than a `Config` field because an image is data:
+/// its length must match the grid, the UI has to be able to re-run a solver from
+/// the answer it is showing, and a config is a value it caches. A4's reference
+/// image is the same kind of input and belongs here beside `rho` when that
+/// solver lands.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Start<'a> {
+    /// Initial density, one entry per voxel, in g cm⁻³. Clamped into the box.
+    pub rho: Option<&'a [f32]>,
+}
+
+impl<'a> Start<'a> {
+    /// Begin from an existing estimate.
+    pub fn from_rho(rho: &'a [f32]) -> Self {
+        Self { rho: Some(rho) }
+    }
+}
+
 /// An iterative reconstruction algorithm.
 ///
 /// Solvers are driven one step at a time so the UI can show progressive results
@@ -109,7 +135,12 @@ pub trait Solver {
     /// the voxel count. `System` is the forward operator — it implements
     /// `LinearOperator` — so this is not a narrowing of what can be solved, only
     /// of what a solver is allowed to forget.
-    fn init(system: &System, counts: &[f32], cfg: &Self::Config) -> Self;
+    ///
+    /// `start` carries an initial estimate when the caller has one, and is
+    /// empty when it does not. A solver that cannot honour a supplied start
+    /// must say so — silently ignoring it turns a warm start into a cold one
+    /// that reports itself as warm.
+    fn init(system: &System, counts: &[f32], cfg: &Self::Config, start: &Start<'_>) -> Self;
 
     /// Advance one iteration (or one subset sweep).
     fn step(&mut self, ctl: &Control) -> StepReport;

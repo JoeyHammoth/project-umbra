@@ -19,6 +19,25 @@ data, with each method's failure mode visible. ★ marks the distinctive items.
 | A12 | Event-level muon Monte Carlo | `umbra-physics` | not started |
 | A13 ★ | Amortised SBI (NPE) via ONNX, validated with SBC/TARP | offline + `umbra-infer` | not started (stretch) |
 
+## Measured the same way
+
+The portfolio's numbers only mean something if they are commensurable, so every
+solver is timed on one dataset at one level: the committed default scene at L0,
+starting from the bulk density, with the wall-clock to a fixed **data fit** —
+the Poisson NLL of the estimate. The fit is computed by the harness rather than
+read from the solver, because A2–A4's own objectives include a prior and a larger
+penalty would look like a better reconstruction.
+
+`cargo bench -p umbra-recon --bench portfolio` prints per-step cost and
+time-to-fit for each entry, and CI runs it on every push. A 10% regression gate
+needs a controlled baseline and is M6's work; until then the number is recorded
+in each run's log.
+
+The scene has one detector, so its 32 rays are a single view. That is enough to
+compare solvers and not enough to test ordered-subset acceleration, which needs
+several distinct views to alternate between — the criterion in #10 is re-scoped
+to a multi-view scene for exactly that reason.
+
 ## Why these, and how they relate
 
 The classical muography method is filtered back projection, which assumes

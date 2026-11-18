@@ -94,7 +94,7 @@ use umbra_forward::expected::ForwardParams;
 use umbra_forward::scene::SceneSpec;
 use umbra_forward::System;
 
-use crate::{Control, Solver, StepReport};
+use crate::{Control, Solver, Start, StepReport};
 
 /// Tuning for [`TransmissionEm`].
 #[derive(Debug, Clone, PartialEq)]
@@ -180,19 +180,39 @@ pub struct TransmissionEm {
 }
 
 impl TransmissionEm {
-    /// Builds the solver for a system and the counts it should explain.
+    /// Builds the solver for a system and the counts it should explain,
+    /// starting from the scene's bulk density.
+    pub fn new(system: &System, counts: &[f32], cfg: A1Config) -> Self {
+        Self::with_start(system, counts, cfg, &Start::default())
+    }
+
+    /// Builds the solver, beginning from `start.rho` when one is supplied.
     ///
     /// # Panics
     ///
-    /// Panics if `counts` does not have one entry per ray cell, or if the
-    /// attenuation length is not positive — a zero or negative `Λ` would make
-    /// the model meaningless rather than merely badly tuned.
-    pub fn new(system: &System, counts: &[f32], cfg: A1Config) -> Self {
+    /// Panics if `counts` does not have one entry per ray cell, if `start.rho`
+    /// does not have one entry per voxel, or if the attenuation length is not
+    /// positive — a zero or negative `Λ` would make the model meaningless
+    /// rather than merely badly tuned.
+    pub fn with_start(system: &System, counts: &[f32], cfg: A1Config, start: &Start<'_>) -> Self {
         assert_eq!(
             counts.len(),
             system.ray_count(),
             "counts must have one entry per ray cell"
         );
+        let rho: Vec<f32> = match start.rho {
+            Some(rho) => {
+                assert_eq!(
+                    rho.len(),
+                    system.voxel_count(),
+                    "a starting estimate must have one entry per voxel"
+                );
+                rho.iter()
+                    .map(|density| density.clamp(0.0, cfg.rho_max))
+                    .collect()
+            }
+            None => vec![cfg.rho_init.max(0.0); system.voxel_count()],
+        };
         assert!(
             cfg.attenuation_gcm2.is_finite() && cfg.attenuation_gcm2 > 0.0,
             "the L0 attenuation length must be positive"
@@ -203,7 +223,6 @@ impl TransmissionEm {
             .map(|ray| cfg.exposure_s.max(0.0) * ray.k_scale * cfg.flux0)
             .collect();
         let subsets = partition(system.ray_count(), cfg.subsets);
-        let rho = vec![cfg.rho_init.max(0.0); system.voxel_count()];
         let row_sum: Vec<f32> = (0..system.ray_count())
             .map(|ray| system.l.row(ray).map(|(_, length)| length).sum())
             .collect();
@@ -378,8 +397,8 @@ fn partition(n_rays: usize, subsets: u32) -> Vec<Vec<u32>> {
 impl Solver for TransmissionEm {
     type Config = A1Config;
 
-    fn init(system: &System, counts: &[f32], cfg: &Self::Config) -> Self {
-        Self::new(system, counts, cfg.clone())
+    fn init(system: &System, counts: &[f32], cfg: &Self::Config, start: &Start<'_>) -> Self {
+        Self::with_start(system, counts, cfg.clone(), start)
     }
 
     fn step(&mut self, ctl: &Control) -> StepReport {
@@ -478,6 +497,42 @@ mod tests {
     fn the_wrong_number_of_counts_is_rejected() {
         let system = trivial_system(3);
         let _ = TransmissionEm::new(&system, &[1.0, 2.0], A1Config::default());
+    }
+
+    #[test]
+    fn a_supplied_start_is_used_rather_than_the_bulk_density() {
+        let system = trivial_system(2);
+        let start = [0.1f32, 0.2];
+        let solver = TransmissionEm::with_start(
+            &system,
+            &[10.0, 10.0],
+            A1Config::default(),
+            &Start::from_rho(&start),
+        );
+        assert_eq!(solver.estimate(), &start);
+    }
+
+    #[test]
+    fn a_start_is_clamped_into_the_box() {
+        let system = trivial_system(1);
+        let cfg = A1Config {
+            rho_max: 4.0,
+            ..A1Config::default()
+        };
+        let solver = TransmissionEm::with_start(&system, &[10.0], cfg, &Start::from_rho(&[7.0]));
+        assert_eq!(solver.estimate(), &[4.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "one entry per voxel")]
+    fn a_start_of_the_wrong_length_is_rejected() {
+        let system = trivial_system(2);
+        let _ = TransmissionEm::with_start(
+            &system,
+            &[10.0, 10.0],
+            A1Config::default(),
+            &Start::from_rho(&[1.0]),
+        );
     }
 
     #[test]

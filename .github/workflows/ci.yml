@@ -42,11 +42,13 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
-      # Records A1's runtime on every run. A percentage regression gate needs a
-      # controlled baseline machine, which is M6's benchmark work; until then the
-      # number is in the log rather than enforced.
+      # Records the portfolio's runtime on every run: per-step cost and the
+      # wall-clock to a shared fit target, so A1-A4 stay comparable as they land.
+      # A percentage regression gate needs a controlled baseline machine, which is
+      # M6's benchmark work; until then the number is in the log rather than
+      # enforced.
       - name: Solver benchmark
-        run: cargo bench -p umbra-recon --bench a1
+        run: cargo bench -p umbra-recon --bench portfolio
 
       - name: Build wasm core
         run: cargo build -p umbra-wasm --target wasm32-unknown-unknown --release

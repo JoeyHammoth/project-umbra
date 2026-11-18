@@ -14,7 +14,8 @@ umbra-physics.workspace = true
 
 # The benchmark is a plain binary on purpose: `criterion` pulls in `windows-sys`
 # with raw-dylib imports, which will not link on the windows-gnu host without
-# `dlltool`. See the header of benches/a1.rs.
+# `dlltool`. See the header of benches/portfolio.rs, which also explains the
+# metric every solver is measured by.
 [[bench]]
-name = "a1"
+name = "portfolio"
 harness = false
