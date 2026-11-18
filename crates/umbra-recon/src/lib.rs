@@ -1,7 +1,20 @@
+//! Reconstruction solvers (A1–A5).
+//!
+//! | Module | Algorithm |
+//! |---|---|
+//! | [`a1`] | ordered-subset transmission EM, L0 only |
+//!
+//! Solvers are driven one step at a time so a caller can show progressive
+//! results and cancel between steps; see [`Solver`].
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use umbra_core::LinearOperator;
+use umbra_forward::System;
+
+pub mod a1;
+
+pub use a1::{A1Config, TransmissionEm};
 
 /// One iteration's worth of feedback from a solver.
 #[derive(Debug, Clone, PartialEq)]
@@ -88,8 +101,15 @@ pub trait Solver {
     /// Algorithm-specific configuration.
     type Config;
 
-    /// Build a solver for the given operator and observed counts.
-    fn init(op: &dyn LinearOperator, counts: &[f32], cfg: &Self::Config) -> Self;
+    /// Build a solver for the given system and observed counts.
+    ///
+    /// The argument is [`System`] rather than a bare [`umbra_core::LinearOperator`]
+    /// because every solver needs more than the matrix: `k_scale` turns counts
+    /// into transmission, `zen` selects the flux integral, and the grid gives
+    /// the voxel count. `System` is the forward operator — it implements
+    /// `LinearOperator` — so this is not a narrowing of what can be solved, only
+    /// of what a solver is allowed to forget.
+    fn init(system: &System, counts: &[f32], cfg: &Self::Config) -> Self;
 
     /// Advance one iteration (or one subset sweep).
     fn step(&mut self, ctl: &Control) -> StepReport;

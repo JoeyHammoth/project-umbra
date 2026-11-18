@@ -11,3 +11,10 @@ description = "Reconstruction solvers A1-A5 for UMBRA"
 umbra-core.workspace = true
 umbra-forward.workspace = true
 umbra-physics.workspace = true
+
+# The benchmark is a plain binary on purpose: `criterion` pulls in `windows-sys`
+# with raw-dylib imports, which will not link on the windows-gnu host without
+# `dlltool`. See the header of benches/a1.rs.
+[[bench]]
+name = "a1"
+harness = false
