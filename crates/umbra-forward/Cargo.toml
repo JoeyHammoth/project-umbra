@@ -1,0 +1,11 @@
+[package]
+name = "umbra-forward"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "System builder, forward/adjoint model and analytic chord model for UMBRA"
+
+[dependencies]
+umbra-core.workspace = true
+umbra-physics.workspace = true

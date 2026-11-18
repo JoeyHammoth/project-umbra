@@ -1,0 +1,17 @@
+[package]
+name = "umbra-cli"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Native tooling for UMBRA: table generation, parity runs and benchmarks"
+
+[[bin]]
+name = "umbra"
+path = "src/main.rs"
+
+[dependencies]
+umbra-core.workspace = true
+umbra-physics.workspace = true
+umbra-forward.workspace = true
+umbra-stats.workspace = true

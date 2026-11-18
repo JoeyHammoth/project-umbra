@@ -1,0 +1,12 @@
+[package]
+name = "umbra-infer"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Parametric Bayesian void inversion: analytic chords, ensemble MCMC and nested sampling"
+
+[dependencies]
+umbra-core.workspace = true
+umbra-forward.workspace = true
+umbra-physics.workspace = true

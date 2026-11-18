@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/umbra-core",
+    "crates/umbra-physics",
+    "crates/umbra-forward",
+    "crates/umbra-recon",
+    "crates/umbra-stats",
+    "crates/umbra-infer",
+    "crates/umbra-design",
+    "crates/umbra-vis",
+    "crates/umbra-wasm",
+    "crates/umbra-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/JoeyHammoth/project-umbra"
+authors = ["Joey Hammoth"]
+
+[workspace.dependencies]
+umbra-core = { path = "crates/umbra-core" }
+umbra-physics = { path = "crates/umbra-physics" }
+umbra-forward = { path = "crates/umbra-forward" }
+umbra-recon = { path = "crates/umbra-recon" }
+umbra-stats = { path = "crates/umbra-stats" }
+umbra-infer = { path = "crates/umbra-infer" }
+umbra-design = { path = "crates/umbra-design" }
+umbra-vis = { path = "crates/umbra-vis" }
+wasm-bindgen = "0.2"
+
+# Spec §5.11: fat LTO, single codegen unit, panic=abort so no panic unwinds
+# across the wasm-bindgen boundary.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
