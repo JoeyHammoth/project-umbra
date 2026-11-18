@@ -1,0 +1,10 @@
+[package]
+name = "umbra-physics"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Cosmic-ray muon flux, range-energy relation, detector model and event MC for UMBRA"
+
+[dependencies]
+umbra-core.workspace = true
