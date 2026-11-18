@@ -1,0 +1,14 @@
+# Test-fixture provenance registry
+#
+# Read by tools/check-licensing.sh, which runs in CI. Every non-Rust file under
+# crates/*/tests/ must appear here, so that a fixture cannot enter the tree
+# without someone stating where it came from. Origins:
+#
+#   third-party  authored elsewhere. The path must also be named in
+#                THIRD-PARTY-NOTICES.md, together with its licence and notice.
+#   generated    produced by a tool in this repository, reproducible from
+#                source. Say how in a trailing note.
+#
+# Columns: path, origin, optional note.
+
+crates/umbra-core/tests/kat_vectors    third-party
