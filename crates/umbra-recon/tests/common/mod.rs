@@ -81,17 +81,27 @@ fn text<'a>(value: &'a Json, key: &str) -> &'a str {
         .unwrap_or_else(|| panic!("golden is missing string `{key}`"))
 }
 
-/// Loads the scene and the golden dataset it was generated from.
+/// Loads the shared default scene and the golden dataset generated from it.
 pub fn load() -> Golden {
-    let scene = SceneSpec::from_json_str(&read(SCENE_PATH))
-        .unwrap_or_else(|error| panic!("{SCENE_PATH}: {error}"));
+    load_from(SCENE_PATH, GOLDEN_PATH)
+}
 
-    let golden_text = read(GOLDEN_PATH);
-    let golden = json::parse(&golden_text).unwrap_or_else(|error| panic!("{GOLDEN_PATH}: {error}"));
+/// Loads any committed scene and its golden dataset.
+///
+/// A second scene exists because the default one has a single detector, which
+/// makes ordered-subset acceleration untestable and a buried void ambiguous;
+/// see `web/src/scenes/multiview.json`. Both datasets go through this function,
+/// so no solver test can invent a fixture of its own.
+pub fn load_from(scene_path: &str, golden_path: &str) -> Golden {
+    let scene = SceneSpec::from_json_str(&read(scene_path))
+        .unwrap_or_else(|error| panic!("{scene_path}: {error}"));
+
+    let golden_text = read(golden_path);
+    let golden = json::parse(&golden_text).unwrap_or_else(|error| panic!("{golden_path}: {error}"));
     assert_eq!(
         text(&golden, "schema"),
         umbra_forward::GOLDEN_SCHEMA,
-        "{GOLDEN_PATH} was written by a different generator"
+        "{golden_path} was written by a different generator"
     ); // The golden restates the grid so a dataset can be read without the scene;
        // it must agree with the scene, or the two were regenerated apart.
     let grid_json = golden.get("grid").expect("golden carries its grid");
@@ -104,7 +114,7 @@ pub fn load() -> Golden {
     );
     assert_eq!(
         golden_grid, scene.grid,
-        "{GOLDEN_PATH} was generated from a different grid than {SCENE_PATH} declares"
+        "{golden_path} was generated from a different grid than {scene_path} declares"
     );
 
     Golden {

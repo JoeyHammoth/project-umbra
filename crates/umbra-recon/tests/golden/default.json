@@ -1113,7 +1113,7 @@
   ],
   "count_hash": "20df7e067d38511915313faa91cb4780ab1b10ed139b8d5bda289207742f4956",
   "generated_by": {
-    "command": "cargo run -p umbra-cli -- golden",
+    "command": "cargo run -p umbra-cli -- golden --scene web/src/scenes/default.json",
     "scene": "web/src/scenes/default.json",
     "umbra_version": "0.1.0"
   }

@@ -226,9 +226,15 @@ fn mean(values: &[f32]) -> f32 {
 }
 
 /// The golden document for a scene, and its count hash.
-fn golden_document(spec: &SceneSpec) -> (Json, String) {
+///
+/// `scene` is the path the dataset was generated from, not a constant: once a
+/// second scene exists, a golden that names the wrong file is provenance that
+/// lies, and nothing downstream would notice.
+fn golden_document(spec: &SceneSpec, scene: &Path) -> (Json, String) {
     let data = dataset(spec);
     let hash = counts_hash(&data.counts);
+    let scene_path = scene.display().to_string();
+    let command = format!("cargo run -p umbra-cli -- golden --scene {scene_path}");
     let document = Json::Object(vec![
         ("schema".to_string(), Json::from(GOLDEN_SCHEMA)),
         ("scene_id".to_string(), Json::from(spec.id.as_str())),
@@ -290,11 +296,8 @@ fn golden_document(spec: &SceneSpec) -> (Json, String) {
         (
             "generated_by".to_string(),
             Json::Object(vec![
-                (
-                    "command".to_string(),
-                    Json::from("cargo run -p umbra-cli -- golden"),
-                ),
-                ("scene".to_string(), Json::from(DEFAULT_SCENE)),
+                ("command".to_string(), Json::from(command.as_str())),
+                ("scene".to_string(), Json::from(scene_path.as_str())),
                 (
                     "umbra_version".to_string(),
                     Json::from(env!("CARGO_PKG_VERSION")),
@@ -307,7 +310,7 @@ fn golden_document(spec: &SceneSpec) -> (Json, String) {
 
 fn write_golden(scene: &Path, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let spec = load_scene(scene)?;
-    let (document, hash) = golden_document(&spec);
+    let (document, hash) = golden_document(&spec, scene);
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -449,20 +452,130 @@ mod tests {
         assert_eq!(LinearOperator::ncols(&system), 1024);
     }
 
+    /// The four-pose scene: several views, and a void no single view can place.
+    const MULTIVIEW_SCENE: &str = "web/src/scenes/multiview.json";
+    /// The four-pose scene's golden dataset.
+    const MULTIVIEW_GOLDEN: &str = "crates/umbra-recon/tests/golden/multiview.json";
+
+    /// Numeric array from a golden document.
+    fn numbers(document: &Json, key: &str) -> Vec<f64> {
+        document
+            .get(key)
+            .and_then(Json::as_array)
+            .unwrap_or_else(|| panic!("golden is missing array `{key}`"))
+            .iter()
+            .map(|value| {
+                value
+                    .as_f64()
+                    .unwrap_or_else(|| panic!("golden `{key}` holds a non-number"))
+            })
+            .collect()
+    }
+
+    fn assert_golden_is_fresh(scene: &str, golden: &str) {
+        // Split into the part that must not drift at all and the part that cannot
+        // be bit-stable across machines.
+        //
+        // Everything structural — scene identity, seed, exposure, fidelity, grid,
+        // ray count, density, provenance — is compared exactly: a stale golden
+        // would let a physics change land without anyone reading it (§13.5).
+        //
+        // λ is not: it goes through f32 `exp`, `exp_m1` and the table's `ln`, whose
+        // last-bit behaviour differs between libm implementations. The same scene
+        // generated on Linux and on Windows agrees to 1e-6 relative and can move a
+        // count by one where a sample sits on a rounding boundary — observed, not
+        // hypothesised. Demanding byte equality would make the fixture a property
+        // of the machine that generated it.
+        let path = committed(scene);
+        let spec = load_scene(&path).expect("the scene must load");
+        // Provenance records the repository-relative path the documented command
+        // uses, not the absolute path this test loads from.
+        let (fresh, _) = golden_document(&spec, Path::new(scene));
+        let committed_text = fs::read_to_string(committed(golden))
+            .expect("the golden dataset must be committed at crates/umbra-recon/tests/golden");
+        let committed_json = json::parse(&committed_text).expect("the golden parses");
+
+        let structure = |document: &Json| -> String {
+            let mut rendered = String::new();
+            for key in [
+                "schema",
+                "scene_id",
+                "scene_key",
+                "seed",
+                "exposure_s",
+                "fidelity",
+                "grid",
+                "ray_count",
+                "density",
+                "generated_by",
+            ] {
+                let value = document
+                    .get(key)
+                    .unwrap_or_else(|| panic!("golden is missing `{key}`"));
+                rendered.push_str(key);
+                rendered.push('=');
+                rendered.push_str(&json::to_string_pretty(value));
+                rendered.push('\n');
+            }
+            rendered
+        };
+        assert_eq!(
+            structure(&fresh),
+            structure(&committed_json),
+            "{golden} is stale: run `cargo run -p umbra-cli -- golden --scene {scene} --out {golden}` and review the diff"
+        );
+
+        let fresh_lambda = numbers(&fresh, "lambda");
+        let committed_lambda = numbers(&committed_json, "lambda");
+        assert_eq!(
+            fresh_lambda.len(),
+            committed_lambda.len(),
+            "{golden} changed its ray count"
+        );
+        for (index, (fresh, committed)) in fresh_lambda.iter().zip(&committed_lambda).enumerate() {
+            let relative = (fresh - committed).abs() / committed.abs().max(1e-6);
+            assert!(
+                relative <= 1e-5,
+                "{golden} ray {index}: λ {fresh} vs {committed} (relative {relative:.2e})"
+            );
+        }
+
+        let fresh_counts = numbers(&fresh, "counts");
+        let committed_counts = numbers(&committed_json, "counts");
+        assert_eq!(
+            fresh_counts.len(),
+            committed_counts.len(),
+            "{golden} changed its count length"
+        );
+        let mut moved = 0usize;
+        for (index, (fresh, committed)) in fresh_counts.iter().zip(&committed_counts).enumerate() {
+            let difference = (fresh - committed).abs();
+            assert!(
+                difference <= 1.0,
+                "{golden} cell {index}: {fresh} counts against {committed}"
+            );
+            if difference > 0.0 {
+                moved += 1;
+            }
+        }
+        // One count is a rounding boundary; a few percent of the vector is drift.
+        assert!(
+            moved <= fresh_counts.len() / 50,
+            "{golden}: {moved} of {} cells moved, which is drift rather than rounding",
+            fresh_counts.len()
+        );
+    }
+
     #[test]
     fn the_committed_golden_matches_a_fresh_evaluation() {
-        // Byte equality of the regenerated document, not a loose comparison: the
-        // golden is a reviewed artefact, and a stale one would let a physics
-        // change land without anyone reading it (§13.5).
-        let spec = load_scene(&committed(DEFAULT_SCENE)).expect("the default scene must load");
-        let (fresh, _) = golden_document(&spec);
-        let rendered = format!("{}\n", json::to_string_pretty(&fresh));
-        let committed_golden = fs::read_to_string(committed(DEFAULT_GOLDEN))
-            .expect("the golden dataset must be committed at crates/umbra-recon/tests/golden");
-        assert_eq!(
-            rendered, committed_golden,
-            "the golden dataset is stale: run `cargo run -p umbra-cli -- golden` and review the diff"
-        );
+        assert_golden_is_fresh(DEFAULT_SCENE, DEFAULT_GOLDEN);
+    }
+
+    #[test]
+    fn the_multiview_golden_matches_a_fresh_evaluation() {
+        // Two scenes, two goldens: a second fixture nobody regenerates is a
+        // fixture that quietly stops describing its scene.
+        assert_golden_is_fresh(MULTIVIEW_SCENE, MULTIVIEW_GOLDEN);
     }
 
     #[test]

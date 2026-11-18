@@ -1,0 +1,52 @@
+{
+  "schema": "umbra.scene/1",
+  "id": "multiview-slab",
+  "label": "Slab seen from four sides, with a buried void",
+  "schematic": true,
+  "units": { "length": "m", "density": "g/cm3" },
+  "primitives": [
+    { "kind": "box", "c": [0, 0, 0], "half": [6, 1, 6], "rot": [0, 0, 0, 1], "rho": 2.65 }
+  ],
+  "voids": [
+    { "kind": "capsule", "a": [-1.5, 0, 0], "b": [1.5, 0, 0], "r": 0.6 }
+  ],
+  "detectors": [
+    {
+      "pose": { "p": [0, -9, 0], "n": [0, 1, 0], "up": [1, 0, 0] },
+      "area_m2": 0.25,
+      "eff": 0.9,
+      "bins": { "flat": { "min": -0.5, "max": 0.5, "bins": 16 } },
+      "sigma_ang_mrad": 10,
+      "bg_rate_hz": 0.05
+    },
+    {
+      "pose": { "p": [0, 9, 0], "n": [0, -1, 0], "up": [1, 0, 0] },
+      "area_m2": 0.25,
+      "eff": 0.9,
+      "bins": { "flat": { "min": -0.5, "max": 0.5, "bins": 16 } },
+      "sigma_ang_mrad": 10,
+      "bg_rate_hz": 0.05
+    },
+    {
+      "pose": { "p": [-9, 0, 0], "n": [1, 0, 0], "up": [0, 1, 0] },
+      "area_m2": 0.25,
+      "eff": 0.9,
+      "bins": { "flat": { "min": -0.5, "max": 0.5, "bins": 16 } },
+      "sigma_ang_mrad": 10,
+      "bg_rate_hz": 0.05
+    },
+    {
+      "pose": { "p": [9, 0, 0], "n": [-1, 0, 0], "up": [0, 1, 0] },
+      "area_m2": 0.25,
+      "eff": 0.9,
+      "bins": { "flat": { "min": -0.5, "max": 0.5, "bins": 16 } },
+      "sigma_ang_mrad": 10,
+      "bg_rate_hz": 0.05
+    }
+  ],
+  "physics": { "level": "L1", "a": 2.0e-3, "b": 4.0e-6, "rho_bulk": 2.65, "x0": 26.5 },
+  "exposure_s": 2592000,
+  "grid": { "n": [32, 32], "h_m": 0.5, "origin_m": [-8, -8] },
+  "seed": 11,
+  "notes": "Four detectors, one from each side, so every voxel is seen from more than one direction. The void is a 3 m capsule buried at the mid-plane: unlike the default scene's corridor it does not break either surface, so a single view cannot separate it from a density variation along the ray, and a smoothness prior will flatten it. This is the scene A4's one-sided anchor and the ordered-subset acceleration criterion are tested on; the default scene stays as it is so its golden counts and the A1 measurements on them remain valid."
+}
