@@ -1,0 +1,9 @@
+[package]
+name = "umbra-core"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Grids, sparse operators, geometry primitives and RNG for UMBRA"
+
+[dependencies]
