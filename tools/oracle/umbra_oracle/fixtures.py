@@ -176,7 +176,12 @@ def emit_fixtures(out: Path, seed: int) -> int:
     for name, shapes, analytic_tolerance in CASES:
         fixture = build_case(name, shapes, analytic_tolerance, seed)
         path = out / f"{name}.json"
-        path.write_text(json.dumps(fixture, indent=2) + "\n", encoding="utf-8")
+        # newline="\n" deliberately: the fixtures are committed with LF, and a
+        # Windows regeneration must not rewrite them as CRLF and show a
+        # whitespace-only diff that hides real changes.
+        path.write_text(
+            json.dumps(fixture, indent=2) + "\n", encoding="utf-8", newline="\n"
+        )
         total_rays += len(fixture["rays"])
         print(
             f"wrote {path} ({len(fixture['rays'])} rays, "
