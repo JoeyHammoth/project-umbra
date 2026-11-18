@@ -19,13 +19,14 @@
 //!
 //! # Known-answer parity
 //!
-//! The three published Random123 `tests/kat_vectors` entries for
-//! `philox4x32 10` are transcribed into the tests below: the all-zero input,
-//! the all-ones input, and the π-digit counter/key pair. They are the
+//! The complete Random123 `tests/kat_vectors` file is committed unmodified at
+//! `crates/umbra-core/tests/kat_vectors`, and every `philox4x32` row in it is
+//! checked below: all three inputs — all-zero, all-ones, and the π-digit
+//! counter/key pair — at both the 7- and 10-round counts. Those are the
 //! reference answers rather than values produced here, so a wrong multiplier,
-//! round count or key-bump order fails the first line. The block function they
-//! exercise is the same one [`Philox::refill`] calls, which is what makes the
-//! parity claim cover the streams the simulator actually consumes.
+//! round count or key-bump order fails immediately. The function they exercise
+//! is the one [`Philox::refill`] calls, which is what makes the parity claim
+//! cover the streams the simulator actually consumes.
 
 /// Philox-4x32 round multiplier, first pair.
 const M0: u32 = 0xD251_1F53;
@@ -59,16 +60,18 @@ fn round(ctr: &mut [u32; 4], key: &mut [u32; 2]) {
     key[1] = key[1].wrapping_add(W1);
 }
 
-/// The Philox-4x32-10 block function: a 128-bit counter and a 64-bit key in,
-/// 128 bits out, with no state carried between calls.
+/// The Philox-4x32 block function: a 128-bit counter, a 64-bit key and a round
+/// count in, 128 bits out, with no state carried between calls.
 ///
 /// This is the unit the published known-answer vectors specify, and the one
 /// [`Philox::refill`] calls, so testing it is testing the generator rather than
-/// a parallel reimplementation of it.
-fn philox_block(ctr: [u32; 4], key: [u32; 2]) -> [u32; 4] {
+/// a parallel reimplementation of it. `rounds` is a parameter because the
+/// reference file also publishes the 7-round variant, which costs nothing to
+/// check; what this crate ships is [`ROUNDS`].
+fn philox_block(ctr: [u32; 4], key: [u32; 2], rounds: usize) -> [u32; 4] {
     let mut ctr = ctr;
     let mut key = key;
-    for _ in 0..ROUNDS {
+    for _ in 0..rounds {
         round(&mut ctr, &mut key);
     }
     ctr
@@ -125,7 +128,7 @@ impl Philox {
             0x0BAD_5EED,
             0xA5A5_5A5A,
         ];
-        self.batch = philox_block(ctr, self.key);
+        self.batch = philox_block(ctr, self.key, ROUNDS);
         self.next = 0;
         self.block = self.block.wrapping_add(1);
     }
@@ -290,36 +293,59 @@ pub fn stream_id(scene_key: u64, task: u32, index: u64) -> u64 {
 mod tests {
     use super::*;
 
-    /// Random123 `tests/kat_vectors`, the `philox4x32 10` rows: counter, key,
-    /// expected output. Transcribed from the reference file, never regenerated
-    /// from this implementation.
+    /// The committed Random123 `tests/kat_vectors`, parsed rather than
+    /// transcribed. Every `philox4x32` row is checked: the 10-round rows are the
+    /// generator this crate ships, and the 7-round rows additionally prove the
+    /// round loop and key-bump order are genuinely parameterised rather than
+    /// tuned to a single setting.
+    ///
+    /// Rows for generators this crate does not implement are skipped, so the
+    /// final count assertion is what stops the test passing on an empty parse.
     #[test]
-    fn matches_random123_known_answers() {
-        let vectors: [([u32; 4], [u32; 2], [u32; 4]); 3] = [
-            (
-                [0x0000_0000; 4],
-                [0x0000_0000; 2],
-                [0x6627_e8d5, 0xe169_c58d, 0xbc57_ac4c, 0x9b00_dbd8],
-            ),
-            (
-                [0xFFFF_FFFF; 4],
-                [0xFFFF_FFFF; 2],
-                [0x408f_276d, 0x41c8_3b0e, 0xa20b_c7c6, 0x6d54_51fd],
-            ),
-            (
-                // Counter = the first four words of π, key = the next two.
-                [0x243f_6a88, 0x85a3_08d3, 0x1319_8a2e, 0x0370_7344],
-                [0xa409_3822, 0x299f_31d0],
-                [0xd16c_fe09, 0x94fd_cceb, 0x5001_e420, 0x2412_6ea1],
-            ),
-        ];
-        for (index, (ctr, key, expected)) in vectors.iter().enumerate() {
+    fn matches_random123_kat_vectors() {
+        const FIXTURE: &str = include_str!("../tests/kat_vectors");
+        let mut checked = 0usize;
+        for (line_no, line) in FIXTURE.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut fields = line.split_whitespace();
+            if !fields.next().unwrap_or_default().starts_with("philox4x32") {
+                continue;
+            }
+            let rounds: usize = fields
+                .next()
+                .and_then(|r| r.parse().ok())
+                .unwrap_or_else(|| panic!("fixture line {}: missing round count", line_no + 1));
+            let words: Vec<u32> = fields
+                .map(|word| {
+                    u32::from_str_radix(word, 16).unwrap_or_else(|_| {
+                        panic!("fixture line {}: {word} is not hex", line_no + 1)
+                    })
+                })
+                .collect();
             assert_eq!(
-                philox_block(*ctr, *key),
-                *expected,
-                "Random123 vector {index}: ctr {ctr:?} key {key:?}"
+                words.len(),
+                10,
+                "fixture line {}: wanted 4 counter + 2 key + 4 answer words",
+                line_no + 1
             );
+            let ctr: [u32; 4] = words[0..4].try_into().expect("four counter words");
+            let key: [u32; 2] = words[4..6].try_into().expect("two key words");
+            let expected: [u32; 4] = words[6..10].try_into().expect("four answer words");
+            assert_eq!(
+                philox_block(ctr, key, rounds),
+                expected,
+                "Random123 philox4x32 {rounds} row at fixture line {}",
+                line_no + 1
+            );
+            checked += 1;
         }
+        assert_eq!(
+            checked, 6,
+            "the fixture publishes six philox4x32 rows; parsed {checked}"
+        );
     }
 
     /// A snapshot, not a correctness claim: it records how [`Philox::new`] maps
