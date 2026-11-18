@@ -70,7 +70,7 @@ where
                 continue;
             }
             let gain = marginal_utility(&chosen, candidate);
-            if best.map_or(true, |(_, b)| gain > b) {
+            if best.is_none_or(|(_, b)| gain > b) {
                 best = Some((candidate, gain));
             }
         }
