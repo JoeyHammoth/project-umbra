@@ -90,23 +90,16 @@
 //! classical method, and A2–A4 exist to show the difference.
 
 use umbra_core::Csr;
-use umbra_forward::expected::ForwardParams;
 use umbra_forward::scene::SceneSpec;
-use umbra_forward::System;
+use umbra_physics::Fidelity;
 
-use crate::{Control, Solver, Start, StepReport};
+use crate::{Control, Problem, Solver, Start, StepReport};
 
 /// Tuning for [`TransmissionEm`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct A1Config {
     /// Number of ordered subsets. `1` is plain EM over all rays.
     pub subsets: u32,
-    /// Exposure, in seconds. Multiplies the acceptance to give `c_i`.
-    pub exposure_s: f32,
-    /// L0 reference flux `Φ₀`, in cm⁻² s⁻¹ sr⁻¹.
-    pub flux0: f32,
-    /// L0 attenuation length `Λ`, in g cm⁻².
-    pub attenuation_gcm2: f32,
     /// Starting density, in g cm⁻³, for every voxel.
     ///
     /// A multiplicative update cannot move a voxel out of zero, so the start is
@@ -126,9 +119,6 @@ impl Default for A1Config {
     fn default() -> Self {
         Self {
             subsets: 1,
-            exposure_s: 1.0,
-            flux0: 7.0e-3,
-            attenuation_gcm2: 1000.0,
             rho_init: 2.65,
             rho_max: 4.0,
             tolerance: 1.0e-7,
@@ -138,14 +128,15 @@ impl Default for A1Config {
 }
 
 impl A1Config {
-    /// The configuration a scene implies: its exposure and bulk density, with
-    /// the L0 parameters of the standard rock calibration.
+    /// The configuration a scene implies: its bulk density, and a box that can
+    /// hold a denser inclusion.
+    ///
+    /// The physics — flux, attenuation length, exposure — deliberately does not
+    /// appear here. It comes from the [`Problem`], because a second copy of the
+    /// constants is how a solver ends up fitting data it was not generated
+    /// under while every convergence test still passes.
     pub fn from_scene(scene: &SceneSpec) -> Self {
-        let params = ForwardParams::default();
         Self {
-            exposure_s: scene.exposure_s,
-            flux0: params.l0_flux0,
-            attenuation_gcm2: params.l0_attenuation_gcm2,
             rho_init: scene.physics.rho_bulk,
             rho_max: (scene.physics.rho_bulk * 1.5).max(1.0),
             ..Self::default()
@@ -180,58 +171,61 @@ pub struct TransmissionEm {
 }
 
 impl TransmissionEm {
-    /// Builds the solver for a system and the counts it should explain,
-    /// starting from the scene's bulk density.
-    pub fn new(system: &System, counts: &[f32], cfg: A1Config) -> Self {
-        Self::with_start(system, counts, cfg, &Start::default())
+    /// Builds the solver for a problem, starting from the scene's bulk density.
+    pub fn new(problem: &Problem<'_>, cfg: A1Config) -> Self {
+        Self::with_start(problem, cfg, &Start::default())
     }
 
     /// Builds the solver, beginning from `start.rho` when one is supplied.
     ///
     /// # Panics
     ///
-    /// Panics if `counts` does not have one entry per ray cell, if `start.rho`
-    /// does not have one entry per voxel, or if the attenuation length is not
-    /// positive — a zero or negative `Λ` would make the model meaningless
-    /// rather than merely badly tuned.
-    pub fn with_start(system: &System, counts: &[f32], cfg: A1Config, start: &Start<'_>) -> Self {
+    /// Panics if `start.rho` does not have one entry per voxel, if the problem
+    /// is not L0 — A1's model is Beer–Lambert, so L1 data is a model error and
+    /// not a tuning choice — or if the attenuation length is not positive, since
+    /// a zero or negative `Λ` would make the model meaningless rather than
+    /// merely badly tuned.
+    pub fn with_start(problem: &Problem<'_>, cfg: A1Config, start: &Start<'_>) -> Self {
         assert_eq!(
-            counts.len(),
-            system.ray_count(),
-            "counts must have one entry per ray cell"
+            problem.fidelity,
+            Fidelity::L0,
+            "A1 is an L0 method; L1 and L2 data need A2 or A3"
         );
+        let voxels = problem.voxel_count();
         let rho: Vec<f32> = match start.rho {
             Some(rho) => {
                 assert_eq!(
                     rho.len(),
-                    system.voxel_count(),
+                    voxels,
                     "a starting estimate must have one entry per voxel"
                 );
                 rho.iter()
                     .map(|density| density.clamp(0.0, cfg.rho_max))
                     .collect()
             }
-            None => vec![cfg.rho_init.max(0.0); system.voxel_count()],
+            None => vec![cfg.rho_init.max(0.0); voxels],
         };
+        let attenuation_gcm2 = problem.params.l0_attenuation_gcm2;
         assert!(
-            cfg.attenuation_gcm2.is_finite() && cfg.attenuation_gcm2 > 0.0,
+            attenuation_gcm2.is_finite() && attenuation_gcm2 > 0.0,
             "the L0 attenuation length must be positive"
         );
-        let k: Vec<f32> = system
+        let k: Vec<f32> = problem
+            .system
             .rays
             .iter()
-            .map(|ray| cfg.exposure_s.max(0.0) * ray.k_scale * cfg.flux0)
+            .map(|ray| problem.exposure_s.max(0.0) * ray.k_scale * problem.params.l0_flux0)
             .collect();
-        let subsets = partition(system.ray_count(), cfg.subsets);
-        let row_sum: Vec<f32> = (0..system.ray_count())
-            .map(|ray| system.l.row(ray).map(|(_, length)| length).sum())
+        let subsets = partition(problem.ray_count(), cfg.subsets);
+        let row_sum: Vec<f32> = (0..problem.ray_count())
+            .map(|ray| problem.system.l.row(ray).map(|(_, length)| length).sum())
             .collect();
 
         let mut solver = Self {
-            l: system.l.clone(),
-            counts: counts.to_vec(),
+            l: problem.system.l.clone(),
+            counts: problem.counts.to_vec(),
             k,
-            attenuation_gcm2: cfg.attenuation_gcm2,
+            attenuation_gcm2,
             rho,
             lambda: Vec::new(),
             subsets,
@@ -397,8 +391,8 @@ fn partition(n_rays: usize, subsets: u32) -> Vec<Vec<u32>> {
 impl Solver for TransmissionEm {
     type Config = A1Config;
 
-    fn init(system: &System, counts: &[f32], cfg: &Self::Config, start: &Start<'_>) -> Self {
-        Self::with_start(system, counts, cfg.clone(), start)
+    fn init(problem: &Problem<'_>, cfg: &Self::Config, start: &Start<'_>) -> Self {
+        Self::with_start(problem, cfg.clone(), start)
     }
 
     fn step(&mut self, ctl: &Control) -> StepReport {
@@ -430,7 +424,8 @@ impl Solver for TransmissionEm {
 mod tests {
     use super::*;
     use umbra_core::{Grid2, GridAny};
-    use umbra_forward::RayCell;
+    use umbra_forward::{ForwardParams, RayCell, System};
+    use umbra_physics::{generate_default, FluxTable};
 
     fn trivial_system(rows: usize) -> System {
         let mut indptr = vec![0u32];
@@ -481,45 +476,75 @@ mod tests {
         }
     }
 
+    fn l0_problem<'a>(system: &'a System, counts: &'a [f32], flux: &'a FluxTable) -> Problem<'a> {
+        Problem::new(
+            system,
+            counts,
+            flux,
+            Fidelity::L0,
+            1.0e4,
+            ForwardParams::default(),
+        )
+    }
+
     #[test]
-    fn a_scene_supplies_exposure_and_bulk_density() {
+    fn a_scene_supplies_the_bulk_density_and_a_box_that_holds_a_denser_inclusion() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../web/src/scenes/default.json");
         let scene = SceneSpec::from_json_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let cfg = A1Config::from_scene(&scene);
-        assert_eq!(cfg.exposure_s, scene.exposure_s);
         assert_eq!(cfg.rho_init, scene.physics.rho_bulk);
         assert!(cfg.rho_max > scene.physics.rho_bulk);
+    }
+
+    #[test]
+    #[should_panic(expected = "L0 method")]
+    fn an_l1_problem_is_rejected_rather_than_silently_fitted_at_l0() {
+        let system = trivial_system(2);
+        let flux = generate_default();
+        let counts = [10.0f32, 10.0];
+        let problem = Problem::new(
+            &system,
+            &counts,
+            &flux,
+            Fidelity::L1,
+            1.0e4,
+            ForwardParams::default(),
+        );
+        let _ = TransmissionEm::new(&problem, A1Config::default());
     }
 
     #[test]
     #[should_panic(expected = "one entry per ray cell")]
     fn the_wrong_number_of_counts_is_rejected() {
         let system = trivial_system(3);
-        let _ = TransmissionEm::new(&system, &[1.0, 2.0], A1Config::default());
+        let flux = generate_default();
+        let _ = l0_problem(&system, &[1.0, 2.0], &flux);
     }
 
     #[test]
     fn a_supplied_start_is_used_rather_than_the_bulk_density() {
         let system = trivial_system(2);
+        let flux = generate_default();
+        let counts = [10.0f32, 10.0];
+        let problem = l0_problem(&system, &counts, &flux);
         let start = [0.1f32, 0.2];
-        let solver = TransmissionEm::with_start(
-            &system,
-            &[10.0, 10.0],
-            A1Config::default(),
-            &Start::from_rho(&start),
-        );
+        let solver =
+            TransmissionEm::with_start(&problem, A1Config::default(), &Start::from_rho(&start));
         assert_eq!(solver.estimate(), &start);
     }
 
     #[test]
     fn a_start_is_clamped_into_the_box() {
         let system = trivial_system(1);
+        let flux = generate_default();
+        let counts = [10.0f32];
+        let problem = l0_problem(&system, &counts, &flux);
         let cfg = A1Config {
             rho_max: 4.0,
             ..A1Config::default()
         };
-        let solver = TransmissionEm::with_start(&system, &[10.0], cfg, &Start::from_rho(&[7.0]));
+        let solver = TransmissionEm::with_start(&problem, cfg, &Start::from_rho(&[7.0]));
         assert_eq!(solver.estimate(), &[4.0]);
     }
 
@@ -527,19 +552,20 @@ mod tests {
     #[should_panic(expected = "one entry per voxel")]
     fn a_start_of_the_wrong_length_is_rejected() {
         let system = trivial_system(2);
-        let _ = TransmissionEm::with_start(
-            &system,
-            &[10.0, 10.0],
-            A1Config::default(),
-            &Start::from_rho(&[1.0]),
-        );
+        let flux = generate_default();
+        let counts = [10.0f32, 10.0];
+        let problem = l0_problem(&system, &counts, &flux);
+        let _ = TransmissionEm::with_start(&problem, A1Config::default(), &Start::from_rho(&[1.0]));
     }
 
     #[test]
     fn a_zero_acceptance_ray_is_ignored_rather_than_dividing_by_zero() {
         let mut system = trivial_system(2);
         system.rays[1].k_scale = 0.0;
-        let solver = TransmissionEm::new(&system, &[100.0, 0.0], A1Config::default());
+        let flux = generate_default();
+        let counts = [100.0f32, 0.0];
+        let problem = l0_problem(&system, &counts, &flux);
+        let solver = TransmissionEm::new(&problem, A1Config::default());
         assert_eq!(solver.lambda()[1], 0.0);
         assert!(solver.objective().is_finite());
     }

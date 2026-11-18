@@ -40,7 +40,7 @@ box, prism and ellipsoid targets; MC counts agree with `λ_i` by a χ² test.
 the Lab.
 
 - [x] A1 transmission EM baseline (L0)
-- A2 nonlinear Poisson MAP with L-BFGS-B and Huber TV
+- [x] A2 nonlinear Poisson MAP with L-BFGS-B and Huber TV
 - A3 opacity inversion + PDHG
 - A4 one-sided sparse deviation with FISTA
 - Uncertainty: Fisher/Laplace error bars on every result card
