@@ -40,11 +40,7 @@ pub fn saturating_utility(x: f32, kappa: f32) -> f32 {
 ///
 /// `ts_per_hypothesis` holds the summed Asimov statistic each hypothesis would
 /// accrue from the configuration being evaluated.
-pub fn expected_utility(
-    hypotheses: &[Hypothesis],
-    ts_per_hypothesis: &[f32],
-    kappa: f32,
-) -> f32 {
+pub fn expected_utility(hypotheses: &[Hypothesis], ts_per_hypothesis: &[f32], kappa: f32) -> f32 {
     assert_eq!(
         hypotheses.len(),
         ts_per_hypothesis.len(),
@@ -74,7 +70,7 @@ where
                 continue;
             }
             let gain = marginal_utility(&chosen, candidate);
-            if best.map_or(true, |(_, b)| gain > b) {
+            if best.is_none_or(|(_, b)| gain > b) {
                 best = Some((candidate, gain));
             }
         }
