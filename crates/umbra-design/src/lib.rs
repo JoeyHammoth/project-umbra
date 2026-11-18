@@ -40,11 +40,7 @@ pub fn saturating_utility(x: f32, kappa: f32) -> f32 {
 ///
 /// `ts_per_hypothesis` holds the summed Asimov statistic each hypothesis would
 /// accrue from the configuration being evaluated.
-pub fn expected_utility(
-    hypotheses: &[Hypothesis],
-    ts_per_hypothesis: &[f32],
-    kappa: f32,
-) -> f32 {
+pub fn expected_utility(hypotheses: &[Hypothesis], ts_per_hypothesis: &[f32], kappa: f32) -> f32 {
     assert_eq!(
         hypotheses.len(),
         ts_per_hypothesis.len(),

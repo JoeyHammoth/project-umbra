@@ -34,7 +34,10 @@ mod tests {
     #[test]
     fn zero_opacity_needs_no_energy() {
         assert_eq!(e_min(0.0, STANDARD_ROCK_A, STANDARD_ROCK_B), 0.0);
-        assert_eq!(de_min_dx(0.0, STANDARD_ROCK_A, STANDARD_ROCK_B), STANDARD_ROCK_A);
+        assert_eq!(
+            de_min_dx(0.0, STANDARD_ROCK_A, STANDARD_ROCK_B),
+            STANDARD_ROCK_A
+        );
     }
 
     #[test]
