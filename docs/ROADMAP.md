@@ -43,7 +43,7 @@ the Lab.
 - [x] A2 nonlinear Poisson MAP with L-BFGS-B and Huber TV
 - [x] A3 opacity inversion + PDHG
 - [x] A4 one-sided sparse deviation with FISTA
-- Uncertainty: Fisher/Laplace error bars on every result card
+- [x] Uncertainty: Fisher/Laplace error bars on every result card
 
 Exit criteria: each solver has a convergence test, a runtime benchmark and a
 reconstruction on the shared default scene; A4 recovers a known void where TV
