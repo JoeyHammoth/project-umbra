@@ -46,6 +46,8 @@
 //! two-sided `χ²₁` value instead is the classic mistake here: it doubles the
 //! significance of every candidate.
 
+use std::time::{Duration, Instant};
+
 use umbra_core::{Csr, GridAny};
 use umbra_forward::System;
 
@@ -122,6 +124,22 @@ pub struct ScanResult {
     pub candidates: Vec<ScanCandidate>,
     /// The single most significant candidate, if the scan found any.
     pub peak: Option<ScanCandidate>,
+    /// Where the wall clock went.
+    pub timing: ScanTiming,
+}
+
+/// Wall-clock split of a scan.
+///
+/// Spec §6.5 budgets the *scan correlation* at 50 ms in 2-D, while the transpose
+/// and the back projection are per-call setup that any caller pays once per
+/// scan. Reporting them apart is what lets the kernel be held to the stage the
+/// budget names instead of an accidental sum of both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScanTiming {
+    /// Transpose of `L`, the back projection `Lᵀw`, and the ray weights.
+    pub setup: Duration,
+    /// Band gathers plus the per-candidate score loop.
+    pub correlate: Duration,
 }
 
 /// A template footprint: offsets from the centre and their weights.
@@ -213,11 +231,14 @@ pub fn scan(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> ScanResult {
          a significance it has not measured"
     );
     check_problem(problem);
+    let clock = Instant::now();
     let bank = TemplateBank::new(&problem.system.grid, &cfg.scales_voxels);
     let transposed = transpose(&problem.system.l, problem.system.voxel_count());
     let back = back_projection(problem);
     let weights = ray_weights(problem);
     let mut band = Band::new();
+    let setup = clock.elapsed();
+    let correlating = Instant::now();
 
     let mut best: Vec<ScanCandidate> = Vec::with_capacity(cfg.top_k.max(1));
     let mut peak: Option<ScanCandidate> = None;
@@ -308,6 +329,10 @@ pub fn scan(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> ScanResult {
     ScanResult {
         candidates: best,
         peak,
+        timing: ScanTiming {
+            setup,
+            correlate: correlating.elapsed(),
+        },
     }
 }
 
