@@ -203,9 +203,31 @@ u₀ = 2.5σ,  z = 4      0.0124            0.0176         1.4x
 A `1σ` anchor sits below the regime where the `χ` scaling holds — the excursion
 set there is still dominated by low-threshold structure — and the extrapolation
 then overshoots by a factor of three while looking perfectly plausible. That is
-why `LeeConfig::default()` anchors at `2.5σ`. Even there the agreement is 1.3×,
-against the spec's 20%: the estimator is usable for a provisional global `p` and
-not yet trustworthy for a claim, which is what #15 remains open for.
+why `LeeConfig::default()` anchors at `2.5σ`.
+
+The published campaign — `1000²` voxels, `10⁴` toys, seed `0xc0ffee`, 832 s on
+16 threads, report at [`docs/calibration/lee-2d.md`](calibration/lee-2d.md) — moves
+the picture:
+
+```text
+        empirical global p   extrapolated   ratio   toys above
+z = 3         0.863              1.000      1.16       8628
+z = 4         0.0655             0.0991     1.51        655
+z = 4.5       0.00855            0.0133     1.56         85
+z = 5         0.00105            0.00138    1.31         10
+```
+
+At `3σ` the extrapolation is 16% high, inside the spec's 20%; at `4–4.5σ` it is
+50% high. The honest global `3σ` threshold — where the empirical rate reaches
+the nominal `1.35 × 10⁻³` — is `z = 4.95`, not `3.0`: on this scene a local `3σ`
+peak is **639×** more common than a global one, which is the whole point of the
+layer. The extrapolated curve crosses the nominal rate at essentially the same
+place (`1.38 × 10⁻³` at `z = 5`), so it is usable where it is most needed.
+
+What it is not: certified. The Monte Carlo estimate at the crossing rests on 10
+exceedances (±32%), and the `4–4.5σ` agreement is 1.5×, not 1.2×. That is why
+the campaign runs weekly as a CI artifact rather than the criterion being
+declared met once.
 
 What they do **not** pin is the spec's calibration target: the global `p` at
 `3σ` within ±20% of nominal over `10⁴` toys. That is a campaign, not a unit

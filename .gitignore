@@ -24,3 +24,6 @@ __pycache__/
 .wiki-tmp/
 output/
 .DS_Store
+
+# Chat transcripts from the agent session; never source.
+freebuff-chat-*.md
