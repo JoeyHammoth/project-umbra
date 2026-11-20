@@ -6,14 +6,19 @@
 //! experiment-design utilities are expressed in terms of it.
 
 pub mod laplace;
+pub mod lee;
 pub mod scan;
 
 pub use laplace::{
     poisson_laplace, GraphCurvature, LaplaceConfig, PoissonProblem, SigmaMap, Uncertainty,
 };
+pub use lee::{
+    euler_characteristic_2d, euler_characteristic_3d, lee_calibrate, lee_toy, LeeCalibration,
+    LeeConfig, ToyResult,
+};
 pub use scan::{
-    chi2_mixture_p, refine_lrt, scan, statistics, ScanCandidate, ScanConfig, ScanProblem,
-    ScanResult, TemplateBank,
+    chi2_mixture_p, refine_lrt, scan, statistics, z_map, ScanCandidate, ScanConfig, ScanProblem,
+    ScanResult, ScanTiming, TemplateBank,
 };
 
 /// Median expected significance of `H1` against `H0`, as a `Z` value.
