@@ -140,25 +140,33 @@ Measured on 10⁶ candidates (`cargo bench -p umbra-stats --bench scan`), with
 parallel rays through every voxel — the friendliest geometry the gather can meet:
 
 ```text
-2-D  1e6 candidates, 1e6 voxels:   93 ms   budget  50 ms   MISSED (1.9x)
-3-D  1e6 candidates, 1e6 voxels:  133 ms   budget 2000 ms   met (15x inside)
+                total      correlation      spec budget
+2-D 1e6 cands   78.1 ms      62.7 ms          50 ms    MISSED (1.25x)
+3-D 1e6 cands  118.9 ms      96.8 ms        2000 ms    met
 ```
 
-The 2-D number is still a miss, and is recorded as one. The first version was
-154 ms because the Fisher term gathers per footprint cell — five gathers per
-candidate into a transposed operator that is tens of megabytes at `10⁶`
-voxels. The scan now runs in **bands**: a band of rows gathers the union of its
-cells' incident rays once into a compact array, and every candidate in the band
-reads that instead of the operator. Ray-keyed accumulators keep a ray that
-crosses several footprint cells as one `Δ_i` — squaring its per-cell parts
-separately inflates `I`, and a test comparing the banded scan against the
-single-candidate path exists because that bug happened.
+§6.5 budgets the *scan correlation*, so `ScanResult::timing` splits the two
+stages: `setup` is the transpose of `L` and the back projection (≈15 ms at `10⁶`
+voxels), `correlate` is the band gather plus the score loop. The 2-D number is
+the correlation stage, and it is still a miss.
 
-Banding bought 154 → 93 ms. The rest is per-candidate arithmetic, not memory:
-six axis comparisons, an index, and two loads per footprint cell, five cells per
-candidate at radius 1. The spec's own answer — a per-detector angular spatial
-index that bounds the cells per candidate rather than the operator's size — is
-#14's remaining work.
+The first version was 154 ms because the Fisher term gathers per footprint
+cell — five gathers per candidate into a transposed operator that is tens of
+megabytes at `10⁶` voxels. The scan now runs in **bands**: a band of rows
+gathers the union of its cells' incident rays once into a compact array, and
+every candidate in the band reads that instead of the operator. Ray-keyed
+accumulators keep a ray that crosses several footprint cells as one `Δ_i` —
+squaring its per-cell parts separately inflates `I`, and a test comparing the
+banded scan against the single-candidate path exists because that bug happened.
+
+Banding bought 154 → 62.7 ms on the budgeted stage. The rest is per-candidate
+arithmetic, not memory: six axis comparisons, an index, and two loads per
+footprint cell, five cells per candidate at radius 1. Two levers remain, both
+cheap relative to the angular index: an interior fast path that drops the
+bounds checks for candidates further than `reach` from the grid edge, and a
+transpose built once per *system* rather than once per scan. The larger one is
+the spec's own answer — a per-detector angular index bounding the cells per
+candidate rather than the operator's size.
 
 ## Why these, and how they relate
 

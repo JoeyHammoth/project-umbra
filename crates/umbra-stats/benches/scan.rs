@@ -113,23 +113,26 @@ fn main() {
             // One warm-up so the first allocation does not land in the measurement.
             let _ = scan(&problem, cfg);
             let mut samples = Vec::new();
+            let mut correlations = Vec::new();
             let mut peak = 0.0f32;
             for _ in 0..3 {
                 let started = Instant::now();
                 let result = scan(&problem, cfg);
                 samples.push(started.elapsed());
+                correlations.push(result.timing.correlate);
                 peak = result.peak.map_or(0.0, |c| c.z);
             }
             samples.sort();
+            correlations.sort();
+            let total = ms(samples[samples.len() / 2]);
+            let correlation = ms(correlations[correlations.len() / 2]);
             println!(
-                "{label} {name}: {} candidates, {} rays, {} voxels — median {:>7.1} ms of {:>5.0} ms \
-                 budget (peak Z {:.2})",
+                "{label} {name}: {} candidates, {} rays, {} voxels — median {total:>7.1} ms total, \
+                 {correlation:>7.1} ms correlation of {:>5.0} ms budget (peak Z {peak:.2})",
                 system.voxel_count() * cfg.scales_voxels.len(),
                 system.ray_count(),
                 system.voxel_count(),
-                ms(samples[samples.len() / 2]),
                 budget,
-                peak
             );
         }
     }
