@@ -189,6 +189,24 @@ exact pmf bin by bin at `λ = 12` and `λ = 50`, and its mean and variance at
 within a factor of two of the prediction; and that the calibration is unchanged
 when its toys are merged in reverse order.
 
+`cargo bench -p umbra-stats --bench lee` runs the campaign itself. On the 200²
+scene with 200 toys, the **anchor** matters more than the formula:
+
+```text
+                  empirical p(≥ z)   extrapolated      ratio
+u₀ = 1.0σ,  z = 3      0.326             0.934          2.9x
+u₀ = 2.0σ,  z = 3      0.326             0.557          1.7x
+u₀ = 2.5σ,  z = 3      0.326             0.437          1.3x
+u₀ = 2.5σ,  z = 4      0.0124            0.0176         1.4x
+```
+
+A `1σ` anchor sits below the regime where the `χ` scaling holds — the excursion
+set there is still dominated by low-threshold structure — and the extrapolation
+then overshoots by a factor of three while looking perfectly plausible. That is
+why `LeeConfig::default()` anchors at `2.5σ`. Even there the agreement is 1.3×,
+against the spec's 20%: the estimator is usable for a provisional global `p` and
+not yet trustworthy for a claim, which is what #15 remains open for.
+
 What they do **not** pin is the spec's calibration target: the global `p` at
 `3σ` within ±20% of nominal over `10⁴` toys. That is a campaign, not a unit
 test, and it is the reason #15 is open.

@@ -15,3 +15,7 @@ umbra-physics.workspace = true
 [[bench]]
 name = "scan"
 harness = false
+
+[[bench]]
+name = "lee"
+harness = false
