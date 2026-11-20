@@ -11,3 +11,7 @@ description = "Detection statistics, Asimov significance, look-elsewhere correct
 umbra-core.workspace = true
 umbra-forward.workspace = true
 umbra-physics.workspace = true
+
+[[bench]]
+name = "scan"
+harness = false
