@@ -225,6 +225,49 @@ pub fn statistics(
 /// Panics if the problem's arrays disagree with the system's dimensions, or if
 /// [`ScanConfig::profile_nuisances`] is set (see [`ScanConfig`]).
 pub fn scan(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> ScanResult {
+    let mut best: Vec<ScanCandidate> = Vec::with_capacity(cfg.top_k.max(1));
+    let mut peak: Option<ScanCandidate> = None;
+    let timing = sweep(problem, cfg, |voxel, scale, u, i| {
+        record(&mut best, &mut peak, cfg, voxel, scale, u, i);
+    });
+    for candidate in &mut best {
+        candidate.local_p = normal_p(f64::from(candidate.z));
+    }
+    if let Some(peak) = &mut peak {
+        peak.local_p = normal_p(f64::from(peak.z));
+    }
+    ScanResult {
+        candidates: best,
+        peak,
+        timing,
+    }
+}
+
+/// `Z` at every voxel: the best template scale at each position.
+///
+/// Look-elsewhere calibration needs the whole field, not the `top_k`, so this
+/// runs the same sweep as [`scan`] and keeps the maximum. The map is zero where
+/// no template had support, which the Euler characteristic treats as below
+/// threshold.
+pub fn z_map(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> Vec<f32> {
+    let mut map = vec![0.0f32; problem.system.voxel_count()];
+    sweep(problem, cfg, |voxel, _scale, u, i| {
+        let z = u as f32 / i.sqrt();
+        if z.is_finite() && z > map[voxel] {
+            map[voxel] = z;
+        }
+    });
+    map
+}
+
+/// One pass of the banded score loop with the per-candidate consumer injected.
+///
+/// `scan` files candidates and `z_map` fills a field; both must walk the same
+/// candidate set, so the walk lives here once rather than twice.
+fn sweep<F>(problem: &ScanProblem<'_>, cfg: &ScanConfig, mut visit: F) -> ScanTiming
+where
+    F: FnMut(usize, usize, f64, f32),
+{
     assert!(
         !cfg.profile_nuisances,
         "nuisance profiling is #16: a scan that ignored the nuisances would report \
@@ -239,9 +282,6 @@ pub fn scan(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> ScanResult {
     let mut band = Band::new();
     let setup = clock.elapsed();
     let correlating = Instant::now();
-
-    let mut best: Vec<ScanCandidate> = Vec::with_capacity(cfg.top_k.max(1));
-    let mut peak: Option<ScanCandidate> = None;
 
     let (full, dim) = match &problem.system.grid {
         GridAny::Two(g) => ([g.n[0] as usize, g.n[1] as usize, 1], 2),
@@ -281,7 +321,7 @@ pub fn scan(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> ScanResult {
                         else {
                             continue;
                         };
-                        record(&mut best, &mut peak, cfg, voxel, s, u, i);
+                        visit(voxel, s, u, i);
                     }
                 }
             }
@@ -312,7 +352,7 @@ pub fn scan(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> ScanResult {
                             else {
                                 continue;
                             };
-                            record(&mut best, &mut peak, cfg, voxel, s, u, i);
+                            visit(voxel, s, u, i);
                         }
                     }
                 }
@@ -320,19 +360,9 @@ pub fn scan(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> ScanResult {
             z0 = z1;
         }
     }
-    for candidate in &mut best {
-        candidate.local_p = normal_p(f64::from(candidate.z));
-    }
-    if let Some(peak) = &mut peak {
-        peak.local_p = normal_p(f64::from(peak.z));
-    }
-    ScanResult {
-        candidates: best,
-        peak,
-        timing: ScanTiming {
-            setup,
-            correlate: correlating.elapsed(),
-        },
+    ScanTiming {
+        setup,
+        correlate: correlating.elapsed(),
     }
 }
 
@@ -410,7 +440,7 @@ pub fn chi2_mixture_p(ts: f64) -> f32 {
 }
 
 /// One-sided normal tail `½ erfc(z/√2)`, clamped to `[0, 0.5]`.
-fn normal_p(z: f64) -> f32 {
+pub(crate) fn normal_p(z: f64) -> f32 {
     if !z.is_finite() || z <= 0.0 {
         return 0.5;
     }
@@ -421,7 +451,7 @@ fn normal_p(z: f64) -> f32 {
 ///
 /// Enough for a `p`-value quoted to four significant figures, and it keeps the
 /// crate free of a special-functions dependency for one call site.
-fn erfc(x: f64) -> f64 {
+pub(crate) fn erfc(x: f64) -> f64 {
     let z = x.abs();
     let t = 1.0 / (1.0 + 0.327_591_1 * z);
     let poly = t

@@ -60,7 +60,8 @@ that survives a known false-positive test.
 - [x] Exact LRT refinement of the top-K candidates
 - [ ] Scan at 10^6 candidates: 3-D 96.8 ms correlation (budget 2 s) met, 2-D 62.7 ms correlation / 78.1 ms total (budget 50 ms) still 1.25x over — interior fast path and per-system transpose are the cheap levers left
 - [x] Asimov significance and `t_5σ` forecast (`asimov_significance`, `time_to_five_sigma`, tested)
-- Look-elsewhere calibration: MC null plus Euler-characteristic extrapolation
+- [x] LEE estimator: seeded Poisson toys, max-`Z` null, Euler extrapolation (`umbra_stats::lee`)
+- [ ] LEE calibration campaign: `10^4` H0 toys, global `p` at 3 sigma within +-20% of nominal
 - Nuisance profiling (density, flux, efficiency, alignment)
 - A8 sequential testing; A11 SBC rank histograms
 

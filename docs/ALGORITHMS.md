@@ -168,6 +168,31 @@ transpose built once per *system* rather than once per scan. The larger one is
 the spec's own answer — a per-detector angular index bounding the cells per
 candidate rather than the operator's size.
 
+### A6: look-elsewhere
+
+`umbra_stats::lee` implements both layers of §5.6. `z_map` returns the `Z`
+field a scan already walks; `lee_toy(problem, cfg, lee, seed, t)` draws
+background-only counts from `λ⁰` and scans them; `LeeCalibration::from_toys`
+merges results in any order, because toy `t` depends only on `(seed, t)`. A
+worker pool can therefore split the index range and the calibration is
+bit-identical — that is the reproducibility criterion, not a hope.
+
+The extrapolation is Gross–Vitells:
+`p_global(u) = p_local(u) + ⟨χ(u₀)⟩ (u/u₀)^{d−1} e^{−(u²−u₀²)/2}`, with `χ` the
+Euler characteristic of `{Z > u₀}` (`V − E + F` on a 2-D lattice, `V − E + F − C`
+on a 3-D one).
+
+What the tests actually pin: the Euler characteristic on hand-built lattices
+(square, ring, disjoint blobs, cube, empty); the Poisson sampler against the
+exact pmf bin by bin at `λ = 12` and `λ = 50`, and its mean and variance at
+`λ = 12, 30, 50, 1000`; the `χ` scaling law on 240 synthetic `χ²₁` fields,
+within a factor of two of the prediction; and that the calibration is unchanged
+when its toys are merged in reverse order.
+
+What they do **not** pin is the spec's calibration target: the global `p` at
+`3σ` within ±20% of nominal over `10⁴` toys. That is a campaign, not a unit
+test, and it is the reason #15 is open.
+
 ## Why these, and how they relate
 
 The classical muography method is filtered back projection, which assumes
