@@ -10,7 +10,7 @@ data, with each method's failure mode visible. ★ marks the distinctive items.
 | A3 | Opacity-domain inversion + Chambolle–Pock PDHG with TV | `umbra-recon` | `OpacityPdhg` implemented: safeguarded Newton per ray, delta-method weights, PDHG on `[L; ∇]` with a primal–dual gap |
 | A4 ★ | Reference-anchored one-sided sparse deviation (FISTA) | `umbra-recon` | `SparseDeviation` implemented: monotone FISTA, closed-form one-sided prox, void and inclusion modes |
 | A5 | Plug-and-play with a learned denoiser (ONNX) | `umbra-recon` + web worker | not started (stretch) |
-| A6 ★ | Profile-likelihood scan, Asimov, Euler-characteristic LEE | `umbra-stats` | `asimov_significance` implemented |
+| A6 ★ | Profile-likelihood scan, Asimov, Euler-characteristic LEE | `umbra-stats` | `scan` + `refine_lrt` implemented; the LEE calibration is #15 |
 | A7 ★ | Parametric Bayesian void inversion: analytic chords, MCMC, nested sampling | `umbra-infer` | parameterisation only |
 | A8 ★ | Sequential GLR / mixture-SPRT, `t_5σ ≈ 25/r` | `umbra-stats` | `time_to_five_sigma` implemented |
 | A9 ★ | Bayesian-optimal design, monotone-submodular greedy placement | `umbra-design` | utility + greedy implemented, no Asimov oracle yet |
@@ -115,6 +115,42 @@ the partition cannot quietly spend the acceleration. The 90% target is
 load-bearing: the last parts in 10⁶ are exactly where a guarded subset step
 stops descending and reports convergence instead, so demanding agreement there
 would measure the stopping rule rather than the acceleration.
+
+### A6: the scan
+
+One back projection of weighted residuals, then a correlation with the template
+bank: substituting `Δ_i = Σ_j l_ij ρ_j t_c(j)` into `U_c` gives `U_c = Σ_j ρ_j t_c(j)
+(Lᵀw)_j` with `w_i = D_i (y_i − λ_i^0)/λ_i^0`, so every candidate's numerator is
+read out of a single `Lᵀw`. The Fisher term has no such factorisation — it carries
+`Δ_i²` — so `umbra_stats::scan` accumulates it over the rays each template
+actually crosses, which is exact rather than approximate: the restriction is to
+the support, and `the_footprint_restriction_agrees_with_the_full_sum` holds it to
+`1e-5` against the full sum.
+
+`refine_lrt` profiles the amplitude with the exact Poisson likelihood by
+bisecting the monotone derivative, and reports
+`p = ½ erfc(√(TS/2))` — the one-sided `½δ₀ + ½χ²₁` mixture that the boundary
+`α ≥ 0` requires. Using the two-sided `χ²₁` value would double every
+significance, and returning the NLL where the log-likelihood belongs flips the
+sign of `TS` while leaving `α̂` correct, which is why both are tested against the
+literal definitions: 50 random candidates against a brute-force `U`/`I`, and a
+golden-section profile against the bisection.
+
+Measured on 10⁶ candidates (`cargo bench -p umbra-stats --bench scan`), with
+parallel rays through every voxel — the friendliest geometry the gather can meet:
+
+```text
+2-D  1e6 candidates, 1e6 voxels:  154 ms   budget  50 ms   MISSED (3.1x)
+3-D  1e6 candidates, 1e6 voxels:  232 ms   budget 2000 ms   met (8.6x inside)
+```
+
+The 2-D number is a real miss and is recorded as one. The kernel is
+memory-bound on the transposed operator at radius-1 templates: five footprint
+cells per candidate, each a gather into an 8 MB structure. The fix the spec
+already names — a per-detector angular spatial index, or a tiled scan that
+gathers a tile's union of rays once — is #14's remaining work, and it is the
+same optimisation that would turn the `10⁶`-candidate scan into the sub-second
+interactive path the Detect tab needs.
 
 ## Why these, and how they relate
 

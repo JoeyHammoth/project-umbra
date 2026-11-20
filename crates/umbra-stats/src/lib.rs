@@ -6,9 +6,14 @@
 //! experiment-design utilities are expressed in terms of it.
 
 pub mod laplace;
+pub mod scan;
 
 pub use laplace::{
     poisson_laplace, GraphCurvature, LaplaceConfig, PoissonProblem, SigmaMap, Uncertainty,
+};
+pub use scan::{
+    chi2_mixture_p, refine_lrt, scan, statistics, ScanCandidate, ScanConfig, ScanProblem,
+    ScanResult, TemplateBank,
 };
 
 /// Median expected significance of `H1` against `H0`, as a `Z` value.
@@ -60,32 +65,6 @@ pub fn time_to_five_sigma(t0_seconds: f32, z_at_t0: f32) -> Option<f32> {
         return None;
     }
     Some((25.0 * f64::from(t0_seconds) / ts) as f32)
-}
-
-/// A scanned candidate: where the template sits and how significant it is.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ScanCandidate {
-    /// Flat voxel index of the template centre.
-    pub voxel: usize,
-    /// Template scale index (multi-scale bank).
-    pub scale: u8,
-    /// Local test statistic.
-    pub ts: f32,
-    /// Local significance `Z = U / sqrt(I)`.
-    pub z: f32,
-    /// Best-fit amplitude in `[0, 1]`.
-    pub alpha_hat: f32,
-}
-
-/// Configuration of a multi-scale detection scan.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScanConfig {
-    /// Template scales, as radii in voxels.
-    pub scales_voxels: Vec<f32>,
-    /// Amplitude bounds `[min, max]` enforced during profile fits.
-    pub alpha_bounds: [f32; 2],
-    /// Whether nuisance parameters are profiled.
-    pub profile_nuisances: bool,
 }
 
 /// Calibration of the global (look-elsewhere-corrected) null distribution.
