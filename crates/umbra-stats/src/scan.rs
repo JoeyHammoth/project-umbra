@@ -217,39 +217,86 @@ pub fn scan(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> ScanResult {
     let transposed = transpose(&problem.system.l, problem.system.voxel_count());
     let back = back_projection(problem);
     let weights = ray_weights(problem);
-    let mut footprint = Footprint::new(problem.system.ray_count());
+    let mut band = Band::new();
 
     let mut best: Vec<ScanCandidate> = Vec::with_capacity(cfg.top_k.max(1));
     let mut peak: Option<ScanCandidate> = None;
-    for (s, scale) in bank.scales.iter().enumerate() {
-        for voxel in 0..problem.system.voxel_count() {
-            let Some((u, i)) =
-                footprint.candidate(&transposed, &back, &weights, problem, &scale.offsets, voxel)
-            else {
-                continue;
-            };
-            let z = u / i.sqrt();
-            if !z.is_finite() {
-                continue;
+
+    let (full, dim) = match &problem.system.grid {
+        GridAny::Two(g) => ([g.n[0] as usize, g.n[1] as usize, 1], 2),
+        GridAny::Three(g) => ([g.n[0] as usize, g.n[1] as usize, g.n[2] as usize], 3),
+    };
+    let reach = cfg
+        .scales_voxels
+        .iter()
+        .fold(0.0f32, |widest, radius| widest.max(*radius))
+        .ceil() as usize;
+    // A band has to hold its gathered entries in cache: the 2-D scene is wide in
+    // x and short in y, the 3-D one is a plane per slice, so the two want very
+    // different heights.
+    let height = if dim == 3 { 2 } else { 32 };
+
+    if dim == 2 {
+        let (nx, ny) = (full[0], full[1]);
+        let mut y0 = 0;
+        while y0 < ny {
+            let y1 = (y0 + height).min(ny);
+            let lo = y0.saturating_sub(reach);
+            let hi = (y1 + reach).min(ny);
+            band.build(
+                &transposed,
+                &problem.system.grid,
+                [nx, hi - lo, 1],
+                [0, lo, 0],
+                &weights,
+            );
+            for y in y0..y1 {
+                for x in 0..nx {
+                    let cell = [x, y - lo, 0];
+                    let voxel = y * nx + x;
+                    for (s, scale) in bank.scales.iter().enumerate() {
+                        let Some((u, i)) =
+                            band.candidate(&back, problem.density, &scale.offsets, cell)
+                        else {
+                            continue;
+                        };
+                        record(&mut best, &mut peak, cfg, voxel, s, u, i);
+                    }
+                }
             }
-            let candidate = ScanCandidate {
-                voxel,
-                scale: s as u8,
-                ts: None,
-                z: z as f32,
-                alpha_hat: (u / i).clamp(
-                    f64::from(cfg.alpha_bounds[0]),
-                    f64::from(cfg.alpha_bounds[1]),
-                ) as f32,
-                // The tail is transcendental, and only the kept candidates and
-                // the peak ever have their `p` read: computing it for every
-                // candidate was one `exp` per voxel for nothing.
-                local_p: 0.5,
-            };
-            if peak.is_none_or(|p| candidate.z > p.z) {
-                peak = Some(candidate);
+            y0 = y1;
+        }
+    } else {
+        let (nx, ny, nz) = (full[0], full[1], full[2]);
+        let mut z0 = 0;
+        while z0 < nz {
+            let z1 = (z0 + height).min(nz);
+            let lo = z0.saturating_sub(reach);
+            let hi = (z1 + reach).min(nz);
+            band.build(
+                &transposed,
+                &problem.system.grid,
+                [nx, ny, hi - lo],
+                [0, 0, lo],
+                &weights,
+            );
+            for z in z0..z1 {
+                for y in 0..ny {
+                    for x in 0..nx {
+                        let cell = [x, y, z - lo];
+                        let voxel = (z * ny + y) * nx + x;
+                        for (s, scale) in bank.scales.iter().enumerate() {
+                            let Some((u, i)) =
+                                band.candidate(&back, problem.density, &scale.offsets, cell)
+                            else {
+                                continue;
+                            };
+                            record(&mut best, &mut peak, cfg, voxel, s, u, i);
+                        }
+                    }
+                }
             }
-            insert(&mut best, candidate, cfg.top_k.max(1));
+            z0 = z1;
         }
     }
     for candidate in &mut best {
@@ -572,6 +619,207 @@ impl Footprint {
     }
 }
 
+/// Turns one candidate's statistics into a [`ScanCandidate`] and files it.
+fn record(
+    best: &mut Vec<ScanCandidate>,
+    peak: &mut Option<ScanCandidate>,
+    cfg: &ScanConfig,
+    voxel: usize,
+    scale: usize,
+    u: f64,
+    i: f32,
+) {
+    let z = u as f32 / i.sqrt();
+    if !z.is_finite() {
+        return;
+    }
+    let candidate = ScanCandidate {
+        voxel,
+        scale: scale as u8,
+        ts: None,
+        z,
+        alpha_hat: (u / f64::from(i)).clamp(
+            f64::from(cfg.alpha_bounds[0]),
+            f64::from(cfg.alpha_bounds[1]),
+        ) as f32,
+        // The tail is transcendental, and only the kept candidates and the peak
+        // ever have their `p` read: computing it for every candidate was one
+        // `exp` per voxel for nothing.
+        local_p: 0.5,
+    };
+    if peak.as_ref().is_none_or(|p| candidate.z > p.z) {
+        *peak = Some(candidate);
+    }
+    insert(best, candidate, cfg.top_k.max(1));
+}
+
+/// A band of candidates with its footprint cells gathered once.
+///
+/// The Fisher term is a gather per footprint cell — five of them per candidate at
+/// radius 1, each reaching into the transposed operator, which is tens of
+/// megabytes at 10⁶ voxels. A band gathers the union of its cells' incident rays
+/// once into a compact array, so the per-candidate loop reads cache instead of
+/// the operator. The statistics are unchanged: every ray a template crosses is
+/// still accumulated, from the same chords.
+struct Band {
+    dims: [usize; 3],
+    origin: [usize; 3],
+    nx: usize,
+    ny: usize,
+    /// Cell offsets into `rays`/`lens`: one more than the number of box cells.
+    start: Vec<u32>,
+    /// `(local accumulator, chord length in cm)` per gathered entry, packed so
+    /// the inner loop is one load per entry.
+    entry: Vec<(u32, f32)>,
+    /// Global ray of each local accumulator.
+    lray: Vec<u32>,
+    /// `D²/λ⁰` per local accumulator.
+    lweight: Vec<f32>,
+    /// Global ray to local accumulator, `u32::MAX` until a ray is gathered.
+    local: Vec<u32>,
+    stamp: Vec<u32>,
+    delta: Vec<f32>,
+    touched: Vec<u32>,
+    gen: u32,
+}
+
+impl Band {
+    fn new() -> Self {
+        Self {
+            dims: [0; 3],
+            origin: [0; 3],
+            nx: 0,
+            ny: 0,
+            start: Vec::new(),
+            entry: Vec::new(),
+            lray: Vec::new(),
+            lweight: Vec::new(),
+            local: Vec::new(),
+            stamp: Vec::new(),
+            delta: Vec::new(),
+            touched: Vec::new(),
+            gen: 0,
+        }
+    }
+
+    fn build(
+        &mut self,
+        transposed: &Csr<f32>,
+        grid: &GridAny,
+        dims: [usize; 3],
+        origin: [usize; 3],
+        weights: &[f32],
+    ) {
+        self.dims = dims;
+        self.origin = origin;
+        let (nx, ny) = match grid {
+            GridAny::Two(g) => (g.n[0] as usize, g.n[1] as usize),
+            GridAny::Three(g) => (g.n[0] as usize, g.n[1] as usize),
+        };
+        self.nx = nx;
+        self.ny = ny;
+        self.start.clear();
+        self.start.push(0);
+        self.entry.clear();
+        self.lray.clear();
+        self.lweight.clear();
+        self.local.clear();
+        self.local.resize(weights.len(), u32::MAX);
+        for z in 0..dims[2] {
+            for y in 0..dims[1] {
+                for x in 0..dims[0] {
+                    let index = ((origin[2] + z) * ny + (origin[1] + y)) * nx + origin[0] + x;
+                    let start = transposed.indptr[index] as usize;
+                    let end = transposed.indptr[index + 1] as usize;
+                    for position in start..end {
+                        let ray = transposed.indices[position] as usize;
+                        // One accumulator per *ray*, not per (cell, ray): a ray
+                        // that crosses several footprint cells has one `Δ_i`,
+                        // and squaring its parts separately inflates `I`.
+                        let mut id = self.local[ray];
+                        if id == u32::MAX {
+                            id = self.lray.len() as u32;
+                            self.local[ray] = id;
+                            self.lray.push(ray as u32);
+                            self.lweight.push(weights[ray]);
+                        }
+                        self.entry.push((id, transposed.data[position]));
+                    }
+                    self.start.push(self.entry.len() as u32);
+                }
+            }
+        }
+        let entries = self.lray.len();
+        self.stamp.clear();
+        self.stamp.resize(entries, 0);
+        self.delta.clear();
+        self.delta.resize(entries, 0.0);
+        self.touched.clear();
+        self.gen = 0;
+    }
+
+    /// `(U_c, I_c)` for one candidate, from the band's gathered entries.
+    fn candidate(
+        &mut self,
+        back: &[f32],
+        density: &[f32],
+        offsets: &[(i32, i32, i32, f32)],
+        cell: [usize; 3],
+    ) -> Option<(f64, f32)> {
+        self.gen = self.gen.wrapping_add(1);
+        if self.gen == 0 {
+            self.stamp.iter_mut().for_each(|stamp| *stamp = 0);
+            self.gen = 1;
+        }
+        self.touched.clear();
+        let mut u = 0.0f64;
+        for &(dx, dy, dz, weight) in offsets {
+            let x = cell[0] as i32 + dx;
+            let y = cell[1] as i32 + dy;
+            let z = cell[2] as i32 + dz;
+            if x < 0
+                || y < 0
+                || z < 0
+                || x >= self.dims[0] as i32
+                || y >= self.dims[1] as i32
+                || z >= self.dims[2] as i32
+            {
+                continue;
+            }
+            let (x, y, z) = (x as usize, y as usize, z as usize);
+            let index = ((self.origin[2] + z) * self.ny + (self.origin[1] + y)) * self.nx
+                + self.origin[0]
+                + x;
+            u += f64::from(weight) * f64::from(back[index]);
+            let removed = density[index] * weight;
+            if removed == 0.0 {
+                continue;
+            }
+            let position = (z * self.dims[1] + y) * self.dims[0] + x;
+            let start = self.start[position] as usize;
+            let end = self.start[position + 1] as usize;
+            for &(id, len) in &self.entry[start..end] {
+                let id = id as usize;
+                if self.stamp[id] != self.gen {
+                    self.stamp[id] = self.gen;
+                    self.delta[id] = 0.0;
+                    self.touched.push(id as u32);
+                }
+                self.delta[id] += len * removed;
+            }
+        }
+        let mut i = 0.0f32;
+        for &entry in &self.touched {
+            let delta = self.delta[entry as usize];
+            i += delta * delta * self.lweight[entry as usize];
+        }
+        if i <= 0.0 || !i.is_finite() || !u.is_finite() {
+            return None;
+        }
+        Some((u, i))
+    }
+}
+
 /// Poisson log-likelihood over the rays a template touches, at amplitude `alpha`.
 ///
 /// The positive log-likelihood, not the NLL: the profile maximises it, and `TS`
@@ -640,6 +888,11 @@ fn profile_alpha(
 }
 
 fn insert(best: &mut Vec<ScanCandidate>, candidate: ScanCandidate, top_k: usize) {
+    // Most candidates do not make the list, and the check is one comparison
+    // against the current worst — worth it at 10⁶ candidates × 10 slots.
+    if best.len() >= top_k && candidate.z <= best.last().map_or(f32::NEG_INFINITY, |c| c.z) {
+        return;
+    }
     let position = best
         .iter()
         .position(|existing| candidate.z > existing.z)
@@ -958,6 +1211,31 @@ mod tests {
         }
         if let Some(peak) = result.peak {
             assert!(peak.z.is_finite());
+        }
+    }
+
+    #[test]
+    fn the_banded_scan_agrees_with_the_standalone_statistic() {
+        // The band changes where the entries are read from, never which ones:
+        // each kept candidate must reproduce the single-candidate computation.
+        let (system, density, lambda0, dlambda_dx) = model();
+        let counts: Vec<f32> = lambda0.iter().map(|l| l * 1.03).collect();
+        let p = problem(&system, &counts, &lambda0, &dlambda_dx, &density);
+        let cfg = ScanConfig::default();
+        let bank = TemplateBank::new(&system.grid, &cfg.scales_voxels);
+        let result = scan(&p, &cfg);
+        assert!(!result.candidates.is_empty(), "no candidates");
+        for candidate in &result.candidates {
+            let (u, i) = statistics(&p, &bank, candidate.scale as usize, candidate.voxel)
+                .expect("a kept candidate has support");
+            let z = (u / i.sqrt()) as f32;
+            assert!(
+                (candidate.z - z).abs() <= 1.0e-5 * z.abs().max(1.0),
+                "voxel {} scale {}: banded {}, standalone {z}",
+                candidate.voxel,
+                candidate.scale,
+                candidate.z
+            );
         }
     }
 

@@ -58,7 +58,7 @@ that survives a known false-positive test.
 
 - [x] A6 score scan via one back projection + template correlation
 - [x] Exact LRT refinement of the top-K candidates
-- [ ] Scan at 10^6 candidates: 3-D 232 ms (budget 2 s) met, 2-D 154 ms (budget 50 ms) still 3x over — needs the tiled gather
+- [ ] Scan at 10^6 candidates: 3-D 133 ms (budget 2 s) met, 2-D 93 ms (budget 50 ms) still 1.9x over — banded gather landed, per-candidate arithmetic remains
 - Asimov significance and `t_5σ` forecast
 - Look-elsewhere calibration: MC null plus Euler-characteristic extrapolation
 - Nuisance profiling (density, flux, efficiency, alignment)

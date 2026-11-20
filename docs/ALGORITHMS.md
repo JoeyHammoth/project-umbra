@@ -140,17 +140,25 @@ Measured on 10⁶ candidates (`cargo bench -p umbra-stats --bench scan`), with
 parallel rays through every voxel — the friendliest geometry the gather can meet:
 
 ```text
-2-D  1e6 candidates, 1e6 voxels:  154 ms   budget  50 ms   MISSED (3.1x)
-3-D  1e6 candidates, 1e6 voxels:  232 ms   budget 2000 ms   met (8.6x inside)
+2-D  1e6 candidates, 1e6 voxels:   93 ms   budget  50 ms   MISSED (1.9x)
+3-D  1e6 candidates, 1e6 voxels:  133 ms   budget 2000 ms   met (15x inside)
 ```
 
-The 2-D number is a real miss and is recorded as one. The kernel is
-memory-bound on the transposed operator at radius-1 templates: five footprint
-cells per candidate, each a gather into an 8 MB structure. The fix the spec
-already names — a per-detector angular spatial index, or a tiled scan that
-gathers a tile's union of rays once — is #14's remaining work, and it is the
-same optimisation that would turn the `10⁶`-candidate scan into the sub-second
-interactive path the Detect tab needs.
+The 2-D number is still a miss, and is recorded as one. The first version was
+154 ms because the Fisher term gathers per footprint cell — five gathers per
+candidate into a transposed operator that is tens of megabytes at `10⁶`
+voxels. The scan now runs in **bands**: a band of rows gathers the union of its
+cells' incident rays once into a compact array, and every candidate in the band
+reads that instead of the operator. Ray-keyed accumulators keep a ray that
+crosses several footprint cells as one `Δ_i` — squaring its per-cell parts
+separately inflates `I`, and a test comparing the banded scan against the
+single-candidate path exists because that bug happened.
+
+Banding bought 154 → 93 ms. The rest is per-candidate arithmetic, not memory:
+six axis comparisons, an index, and two loads per footprint cell, five cells per
+candidate at radius 1. The spec's own answer — a per-detector angular spatial
+index that bounds the cells per candidate rather than the operator's size — is
+#14's remaining work.
 
 ## Why these, and how they relate
 
