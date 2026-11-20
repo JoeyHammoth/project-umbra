@@ -115,6 +115,8 @@ undo.
 ## Pull request checklist
 
 - [ ] Linked issue (`Closes #NN`)
+- [ ] No negated keyword: "does not close #NN" *still closes* `#NN`, because the
+      matcher does not read the "not". Use "Advances #NN" for partial work.
 - [ ] Acceptance criteria ticked in the description
 - [ ] Evidence: failing-then-passing test, benchmark delta, or screenshot
 - [ ] Gates above run and green

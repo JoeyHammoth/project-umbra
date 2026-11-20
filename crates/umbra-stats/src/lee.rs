@@ -34,8 +34,16 @@ pub struct LeeConfig {
 }
 
 impl Default for LeeConfig {
+    /// `u₀ = 2.5σ`.
+    ///
+    /// Measured with `benches/lee.rs` on a 200² scene: anchoring at `1σ` puts the
+    /// extrapolated `3σ` global `p` 2.7× above the Monte Carlo tail (0.93 against
+    /// 0.33), because a 1σ excursion set still contains low-threshold structure
+    /// that does not follow the `χ` scaling. At `2.5σ` the ratio is 1.3×. An
+    /// anchor chosen too low is worse than no extrapolation: it looks like a
+    /// `p`-value and is off by a factor of three.
     fn default() -> Self {
-        Self { u0: 1.0, dim: 2 }
+        Self { u0: 2.5, dim: 2 }
     }
 }
 
