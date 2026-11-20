@@ -1,20 +1,36 @@
-//! LEE calibration run: the empirical max-`Z` null against the Gross–Vitells
+//! LEE calibration campaign: the empirical max-`Z` null against the Gross–Vitells
 //! extrapolation, on the same code that ships.
 //!
-//! `UMBRA_LEE_GRID` sets the scene width (default 400) and `UMBRA_LEE_TOYS` the
-//! toy count (default 500). The spec's `3σ` calibration target — global rate
-//! within ±20% of nominal — needs `10⁴` toys on the full `10⁶`-voxel scene, so
-//! that campaign is a parameter change here rather than a rewrite. At the default
-//! size it finishes in seconds, which is the point: the estimator's agreement
-//! with its own Monte Carlo tail is checkable on every commit.
+//! Defaults are the campaign the spec asks for — `1000²` voxels (`10⁶`) and `10⁴`
+//! toys — because this is the run that produces the published report. Env knobs:
+//!
+//! ```text
+//! UMBRA_LEE_GRID     scene width, default 1000
+//! UMBRA_LEE_TOYS     toy count, default 10 000
+//! UMBRA_LEE_U0       Euler anchor in sigma, default 2.5
+//! UMBRA_LEE_THREADS  worker threads, default all cores
+//! UMBRA_LEE_SEED     toy seed, default 0x00C0FFEE
+//! UMBRA_LEE_REPORT   write the markdown report here as well as to stdout
+//! ```
+//!
+//! Toy `t` depends only on `(seed, t)`, so the threads split the index range and
+//! the calibration is identical to the serial run — the report notes the seed and
+//! the split, so a reader can reproduce it.
 //!
 //! Run with `cargo bench -p umbra-stats --bench lee`.
 
+use std::fmt::Write as _;
 use std::time::Instant;
 
 use umbra_core::{Csr, Grid2, GridAny};
 use umbra_forward::{RayCell, System};
-use umbra_stats::{lee_calibrate, LeeConfig, ScanConfig, ScanProblem};
+use umbra_stats::{
+    chi2_mixture_p, lee_toy, LeeCalibration, LeeConfig, ScanConfig, ScanProblem, ToyResult,
+};
+
+/// The spec's nominal 3σ false-positive rate (§7): a correct global `p` curve
+/// should reach this only at the threshold that the correction assigns to `3σ`.
+const NOMINAL_3_SIGMA: f64 = 1.35e-3;
 
 fn scene_2d(n: usize) -> (System, Vec<f32>, Vec<f32>, Vec<f32>) {
     let grid = Grid2::new([n as u32, n as u32], [0.0, 0.0], 0.01);
@@ -53,15 +69,23 @@ fn scene_2d(n: usize) -> (System, Vec<f32>, Vec<f32>, Vec<f32>) {
     (system, density, lambda0, dlambda_dx)
 }
 
+fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
 fn main() {
-    let n: usize = std::env::var("UMBRA_LEE_GRID")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(400);
-    let toys: u32 = std::env::var("UMBRA_LEE_TOYS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(500);
+    let n: usize = env_or("UMBRA_LEE_GRID", 1000);
+    let toys: u32 = env_or("UMBRA_LEE_TOYS", 10_000);
+    let u0: f32 = env_or("UMBRA_LEE_U0", 2.5);
+    let seed: u64 = env_or("UMBRA_LEE_SEED", 0x00c0_ffee_u64);
+    let threads: usize = env_or(
+        "UMBRA_LEE_THREADS",
+        std::thread::available_parallelism().map_or(1, |t| t.get()),
+    );
+
     let (system, density, lambda0, dlambda_dx) = scene_2d(n);
     let cfg = ScanConfig {
         scales_voxels: vec![1.0, 2.0],
@@ -77,43 +101,130 @@ fn main() {
         density: &density,
         attenuation_gcm2: 1.0e3,
     };
-    let u0: f32 = std::env::var("UMBRA_LEE_U0")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(2.5);
     let lee = LeeConfig { u0, dim: 2 };
 
+    let cfg_ref = &cfg;
     let started = Instant::now();
-    let calibration = lee_calibrate(&problem, &cfg, &lee, toys, 0x00c0_ffee);
+    let mut results = vec![
+        ToyResult {
+            max_z: 0.0,
+            euler_at_u0: 0,
+        };
+        toys as usize
+    ];
+    let threads = threads.max(1).min(results.len().max(1));
+    let chunk = results.len().div_ceil(threads);
+    std::thread::scope(|scope| {
+        for (block, slot) in results.chunks_mut(chunk).enumerate() {
+            scope.spawn(move || {
+                for (offset, out) in slot.iter_mut().enumerate() {
+                    *out = lee_toy(
+                        &problem,
+                        cfg_ref,
+                        &lee,
+                        seed,
+                        (block * chunk + offset) as u32,
+                    );
+                }
+            });
+        }
+    });
+    let calibration = LeeCalibration::from_toys(&lee, seed, toys, system.voxel_count(), &results);
     let elapsed = started.elapsed();
 
-    println!(
-        "{n}² voxels, {} rays, {toys} toys in {:.2} s ({:.1} ms/toy)",
+    // The honest 3σ threshold: the smallest z whose empirical global rate is at
+    // or below the nominal 3σ false-positive probability. That is the number a
+    // reader wants, and it is not 3.0.
+    let mut threshold = None;
+    let mut z = 2.0f32;
+    while z <= 6.0 {
+        if f64::from(calibration.empirical_global_p(z)) <= NOMINAL_3_SIGMA * 1.2 {
+            threshold = Some(z);
+            break;
+        }
+        z += 0.05;
+    }
+
+    let mut report = String::new();
+    let _ = writeln!(report, "# LEE calibration — 2-D, {} toys\n", toys);
+    let _ = writeln!(
+        report,
+        "| | |\n|---|---|\n| Scene | {n}² voxels, {} rays |\n| Toys | {toys} |\n| Seed | `0x{seed:016x}` |\n| Threads | {threads} (one toy index range per worker) |\n| Euler anchor `u₀` | {u0}σ |\n| Runtime | {:.1} s ({:.1} ms/toy) |",
         system.ray_count(),
         elapsed.as_secs_f64(),
         elapsed.as_secs_f64() * 1.0e3 / f64::from(toys)
     );
-    println!(
-        "mean χ(u₀ = {:.1}) = {:.3} ± {:.3}, {:} toys above u₀",
-        lee.u0, calibration.mean_euler_at_u0, calibration.euler_stderr, calibration.toys_above_u0
+    let _ = writeln!(
+        report,
+        "\nMean Euler characteristic at `u₀`: **{:.3} ± {:.3}** ({} of {toys} toys exceeded `u₀`).\n",
+        calibration.mean_euler_at_u0, calibration.euler_stderr, calibration.toys_above_u0
     );
-    println!(
-        "max-Z quantiles: 50% {:.2}, 90% {:.2}, 99% {:.2}",
+    let _ = writeln!(
+        report,
+        "max-`Z` quantiles: 50% {:.2}, 90% {:.2}, 99% {:.2}, 99.9% {:.2}.\n",
         calibration.quantile(0.5),
         calibration.quantile(0.9),
-        calibration.quantile(0.99)
+        calibration.quantile(0.99),
+        calibration.quantile(0.999)
     );
-    println!();
-    println!("  z    local p    empirical global    extrapolated    toys above");
-    for z in [1.0f32, 2.0, 3.0, 4.0, 5.0] {
-        let empirical = calibration.empirical_global_p(z);
-        let extrapolated = calibration.extrapolated_global_p(z);
+    let _ = writeln!(
+        report,
+        "| z | local p | empirical global p | extrapolated global p | ratio | toys above |\n|---|---|---|---|---|---|"
+    );
+    for z in [2.0f32, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0] {
+        let empirical = f64::from(calibration.empirical_global_p(z));
+        let extrapolated = f64::from(calibration.extrapolated_global_p(z));
+        let local = f64::from(chi2_mixture_p(f64::from(z) * f64::from(z)));
         let above = calibration.maxima.iter().filter(|&&m| m >= z).count();
-        println!(
-            "{z:>4.1}  {:.3e}      {:.3e}           {:.3e}        {above:>4}",
-            f64::from(umbra_stats::chi2_mixture_p(f64::from(z) * f64::from(z))),
-            empirical,
-            extrapolated
+        // At or below the anchor the function returns the local `p` unchanged,
+        // so a ratio there compares the local tail with the global one and reads
+        // as a spectacular result. It is not a measurement of anything.
+        let ratio = if z <= lee.u0 {
+            "—".to_string()
+        } else {
+            format!("{:.2}", extrapolated / empirical)
+        };
+        let _ = writeln!(
+            report,
+            "| {z:.1} | {local:.3e} | {empirical:.3e} | {extrapolated:.3e} | {ratio} | {above} |"
         );
+    }
+    let _ = writeln!(
+        report,
+        "\nRows at or below `u₀` show the local `p`: the extrapolation does not\napply there, so their ratio is omitted rather than computed."
+    );
+    match threshold {
+        Some(z) => {
+            let _ = writeln!(
+                report,
+                "\n**Global 3σ threshold:** `z = {z:.2}` (empirical global p ≤ {:.3e}, nominal 3σ = {NOMINAL_3_SIGMA:.3e}). A local 3σ peak is *not* a global 3σ result: the look-elsewhere factor here is {:.0}×.",
+                NOMINAL_3_SIGMA,
+                f64::from(calibration.empirical_global_p(3.0)) / NOMINAL_3_SIGMA
+            );
+        }
+        None => {
+            let _ = writeln!(
+                report,
+                "\n**Global 3σ threshold:** not reached within `z ≤ 6` at {toys} toys; the tail needs a larger campaign.",
+            );
+        }
+    }
+    let _ = writeln!(
+        report,
+        "\n## Verdict\n\n- Extrapolation vs Monte Carlo at `z = 3`: **{:.2}×** (spec target: within 20%).\n- `z = 5`: {} toys above, so only the extrapolation exists there and it is unvalidated.",
+        f64::from(calibration.extrapolated_global_p(3.0))
+            / f64::from(calibration.empirical_global_p(3.0)),
+        calibration.maxima.iter().filter(|&&m| m >= 5.0).count()
+    );
+
+    print!("{report}");
+    if let Ok(path) = std::env::var("UMBRA_LEE_REPORT") {
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::write(&path, &report) {
+            Ok(()) => println!("\nreport written to {path}"),
+            Err(error) => eprintln!("\ncould not write {path}: {error}"),
+        }
     }
 }

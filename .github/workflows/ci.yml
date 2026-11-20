@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # The calibration campaign is 10⁴ full-size scans; its numbers only move when
+  # the scan or the estimator does, so it runs weekly rather than per PR.
+  schedule:
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: read
@@ -92,3 +96,35 @@ jobs:
 
       - name: Typecheck and build
         run: npm run build
+
+  # Spec §7 publishes the calibration report as an artifact: the LEE curve, its
+  # agreement with the Monte Carlo tail, and the seeds that produced both.
+  lee-calibration:
+    name: LEE calibration campaign
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run 10⁴-toy campaign on 10⁶ voxels
+        env:
+          UMBRA_LEE_GRID: 1000
+          UMBRA_LEE_TOYS: 10000
+          # Absolute: cargo runs workflows' benches with the *package* directory
+          # as the working directory, so a relative path lands inside the crate.
+          UMBRA_LEE_REPORT: ${{ github.workspace }}/target/lee-calibration/report.md
+        run: cargo bench -p umbra-stats --bench lee
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: lee-calibration-2d
+          path: ${{ github.workspace }}/target/lee-calibration/report.md
+          retention-days: 90
