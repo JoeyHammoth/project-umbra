@@ -87,7 +87,8 @@ side-by-side.
 can respect in 15 minutes.
 
 - [x] `ComputeBus` core: content keys, priority queue, cancellation by worker termination, cache interface with an in-memory store, transferable results, pool sized `min(core−1, 4)` — 12 tests under `node --test`
-- IndexedDB store, browser worker wiring and the `BUILD_SYSTEM`/`EXPECTED`/`SIMULATE` WASM entry points remain
+- [x] `BUILD_SYSTEM`/`EXPECTED`/`SIMULATE` WASM entry points: `umbra_wasm::Core` holds the systems and per-second rates, the façade returns `Float32Array`/`Uint32Array`, and `web/src/compute/handler.ts` forwards those buffers in a transfer list
+- IndexedDB store and the browser worker wiring remain
 - Worker pool, transferable arrays, SIMD/non-SIMD module selection
 - Observatory: 2-D reconstruction, muon rain, exposure scrubbing
 - Detect, Design, Characterise tabs; corner plot; posterior volume

@@ -31,38 +31,6 @@ export type SolverId =
   | 'a4-sparse-deviation'
   | 'a5-plug-and-play';
 
-export interface GridSpec {
-  /** Voxels per axis: 2 entries for slice mode, 3 for volumetric mode. */
-  n: [number, number] | [number, number, number];
-  /** Lower corner in metres. */
-  origin: number[];
-  /** Voxel size in metres. */
-  hM: number;
-}
-
-export interface DetectorSpec {
-  id: string;
-  position: [number, number, number];
-  normal: [number, number, number];
-  areaM2: number;
-  efficiency: number;
-  azBins: number;
-  zenBins: number;
-  sigmaAngMrad: number;
-  bgRateHz: number;
-}
-
-export interface SceneSpec {
-  /** Stable hash of the scene, used as the compute cache key. */
-  key: string;
-  fidelity: FidelityLevel;
-  grid: GridSpec;
-  detectors: DetectorSpec[];
-  /** Reference structure, e.g. the pyramid with its known chambers. */
-  primitives: unknown[];
-  /** Version string of the flux/range tables this scene assumes. */
-  tableVersion: string;
-}
 
 export interface VoidPriorSpec {
   centre: Array<{ min: number; max: number }>;
@@ -73,7 +41,12 @@ export interface VoidPriorSpec {
 /** Payloads keyed by task. */
 export interface Payloads {
   LOAD_TABLES: { tableVersion: string };
-  BUILD_SYSTEM: { scene: SceneSpec };
+  /**
+   * The scene as its §8.1 **document**, not a reshaped JS object: the Rust
+   * loader rejects unknown keys and checks units, so the wire form is the same
+   * text as `web/src/scenes/default.json`. See `SceneSpec::from_json_str`.
+   */
+  BUILD_SYSTEM: { sceneJson: string };
   EXPECTED: { systemKey: string; density: ArrayBufferView; level: FidelityLevel };
   SIMULATE: { expectedKey: string; seed: string; exposureSeconds: number };
   RECON: {
