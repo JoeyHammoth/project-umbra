@@ -192,6 +192,52 @@ per-detector angular index that bounds the cells a candidate can see, rather
 than one bounded by the operator's size — plus a transpose built once per
 *system* instead of once per scan.
 
+### A6: nuisance parameters
+
+`umbra_stats::profile` is spec §5.6's "Systematics" panel. Bulk density
+`κ_ρ`, flux normalisation `κ_Φ`, per-detector efficiency `κ_ε` and two alignment
+offsets `δ` are Gaussian-priored and **profiled**, not marginalised by hand. The
+perturbation is linear in every one of them:
+
+```text
+X_i(θ) = κ_ρ (X_i⁰ − α T_i) + δ_x Gx_i + δ_y Gy_i
+λ_i(θ) = κ_Φ κ_ε,d k_i e^{−X_i(θ)/Λ}
+```
+
+with `T = L(ρ ⊙ t)` and `Gx`, `Gy` the path integrals of the density gradient, so
+alignment stays inside the same response as everything else instead of
+re-voxelising the scene per trial offset. The test statistic is
+`2(F_H0 − F_H1)` on the penalised objectives, with `F = −(ln L + ln π)`; each
+fit is a damped Newton (Levenberg-damped Gauss–Newton, damping scaled by the
+diagonal) on five or six parameters, and the linear solve is a small dense
+elimination.
+
+Every derivative is written out, and one test differentiates the objective
+numerically and compares all six. That test is the point: a profiler that
+finite-differences its objective passes every other test while being the slow
+thing it replaced.
+
+Three identifiability lessons are baked into the tests, because each one is a
+way to get a confident wrong answer:
+
+- **`Λ` must be short enough for density to matter.** At `Λ = 10³ g cm⁻²` a 2%
+  density-scale change moves the rate by 0.06%, and no fit can separate that from
+  the flux. The test scene runs at `Λ = 30 g cm⁻²`, where the same change is
+  percent-level.
+- **One detector makes flux and efficiency exactly degenerate.** They enter only
+  as `κ_Φ κ_ε`, so the data cannot tell them apart; a single-detector scene
+  resolves the product and leaves the split to the priors. Efficiency is only
+  testable with two detectors, which is why the recovery test has two.
+- **Unconstrained means *unconstrained*.** An efficiency whose detector carries
+  no rays has a flat likelihood and returns to its prior mean to machine
+  precision rather than drifting — the test asserts `1e-9`.
+
+Convergence is measured as "the objective can no longer improve relative to its
+own magnitude", not "the gradient is tiny". With `Σ y ≈ 10⁸`, an improvement
+below `1e-9 F` is below the resolution of the `f64` holding `F`, so a strict
+decrease test stops accepting steps long before an absolute gradient threshold
+would ever fire.
+
 ### A6: look-elsewhere
 
 `umbra_stats::lee` implements both layers of §5.6. `z_map` returns the `Z`

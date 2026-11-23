@@ -62,7 +62,7 @@ that survives a known false-positive test.
 - [x] Asimov significance and `t_5σ` forecast (`asimov_significance`, `time_to_five_sigma`, tested)
 - [x] LEE estimator: seeded Poisson toys, max-`Z` null, Euler extrapolation (`umbra_stats::lee`)
 - [ ] LEE calibration campaign: ran `10^4` toys on `10^6` voxels (report: `docs/calibration/lee-2d.md`). Extrapolation 1.16x at 3 sigma; global-3 sigma threshold is z = 4.95, where the MC rate is 22% below nominal on 10 exceedances (+-32%)
-- Nuisance profiling (density, flux, efficiency, alignment)
+- [x] Nuisance profiling (density, flux, efficiency, alignment): damped Newton on the penalised likelihood under `H0` and `H1`, analytic derivatives checked against central differences, six parameters with one detector; profiling costs significance and the drop is reported (`umbra_stats::profile`)
 - A8 sequential testing; A11 SBC rank histograms
 
 Exit criteria: under H0 the global false-positive rate at 3σ is within ±20% of

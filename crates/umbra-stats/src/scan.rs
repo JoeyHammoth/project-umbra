@@ -78,11 +78,12 @@ pub struct ScanConfig {
     pub alpha_bounds: [f32; 2],
     /// How many of the highest-scoring candidates to keep.
     pub top_k: usize,
-    /// Whether nuisance parameters are profiled.
+    /// Whether the kept candidates are re-tested with the nuisances profiled.
     ///
-    /// Not implemented: profiling bulk density, flux, per-detector efficiency
-    /// and alignment is #16. A scan that silently ignored them would report a
-    /// significance it has not measured, so asking for it panics.
+    /// Bulk density, flux, per-detector efficiency and alignment are refitted
+    /// under `H0` and `H1` (see [`crate::profile`]), the candidates' `z` and `p`
+    /// are replaced by the profiled ones, and the significance each cost is
+    /// reported in [`ScanResult::systematics`].
     pub profile_nuisances: bool,
 }
 
@@ -126,6 +127,8 @@ pub struct ScanResult {
     pub peak: Option<ScanCandidate>,
     /// Where the wall clock went.
     pub timing: ScanTiming,
+    /// How much significance the systematics cost, when they were profiled.
+    pub systematics: Option<crate::profile::SystematicsReport>,
 }
 
 /// Wall-clock split of a scan.
@@ -197,6 +200,15 @@ impl TemplateBank {
     pub fn footprint_cells(&self, s: usize) -> usize {
         self.scales[s].offsets.len()
     }
+
+    /// Template offsets and weights of scale `s`.
+    ///
+    /// Exposed because the nuisance profiler needs the same template the scan
+    /// scored with: a profiler that rebuilt its own footprint could disagree
+    /// with the statistic it is supposed to be refining.
+    pub fn offsets(&self, s: usize) -> &[(i32, i32, i32, f32)] {
+        &self.scales[s].offsets
+    }
 }
 
 /// `U_c` and `I_c` for one candidate, from the exact support of the template.
@@ -222,8 +234,7 @@ pub fn statistics(
 ///
 /// # Panics
 ///
-/// Panics if the problem's arrays disagree with the system's dimensions, or if
-/// [`ScanConfig::profile_nuisances`] is set (see [`ScanConfig`]).
+/// Panics if the problem's arrays disagree with the system's dimensions.
 pub fn scan(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> ScanResult {
     let mut best: Vec<ScanCandidate> = Vec::with_capacity(cfg.top_k.max(1));
     let mut peak: Option<ScanCandidate> = None;
@@ -236,10 +247,42 @@ pub fn scan(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> ScanResult {
     if let Some(peak) = &mut peak {
         peak.local_p = normal_p(f64::from(peak.z));
     }
+
+    // Systematics are profiled on the kept candidates, not on all million: a
+    // fit costs a handful of matvecs, and the candidates a scan keeps are the
+    // only ones whose significance anybody reads.
+    let systematics = cfg.profile_nuisances.then(|| {
+        let bank = TemplateBank::new(&problem.system.grid, &cfg.scales_voxels);
+        let profiler = crate::profile::ProfilerConfig::default();
+        let mut report = crate::profile::SystematicsReport::default();
+        for candidate in &mut best {
+            let Some(profile) = crate::profile::profile_candidate(
+                problem,
+                &bank,
+                candidate.scale as usize,
+                candidate.voxel,
+                &profiler,
+            ) else {
+                continue;
+            };
+            report.without.push(profile.z_without_systematics as f32);
+            report.with.push(profile.z as f32);
+            report.max_drop = report.max_drop.max(profile.drop);
+            candidate.z = profile.z as f32;
+            candidate.alpha_hat = profile.h1.alpha as f32;
+            candidate.local_p = crate::profile::profile_p(profile.ts);
+        }
+        // Profiling changes the ordering, so the "highest first" contract has to
+        // be restored rather than assumed.
+        best.sort_by(|a, b| b.z.total_cmp(&a.z));
+        report
+    });
+
     ScanResult {
         candidates: best,
         peak,
         timing,
+        systematics,
     }
 }
 
@@ -268,11 +311,6 @@ fn sweep<F>(problem: &ScanProblem<'_>, cfg: &ScanConfig, mut visit: F) -> ScanTi
 where
     F: FnMut(usize, usize, f64, f32),
 {
-    assert!(
-        !cfg.profile_nuisances,
-        "nuisance profiling is #16: a scan that ignored the nuisances would report \
-         a significance it has not measured"
-    );
     check_problem(problem);
     let clock = Instant::now();
     let bank = TemplateBank::new(&problem.system.grid, &cfg.scales_voxels);
