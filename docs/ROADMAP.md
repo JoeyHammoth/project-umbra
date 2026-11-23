@@ -86,7 +86,8 @@ side-by-side.
 **Deliverable:** the app a recruiter can understand in 30 seconds and a physicist
 can respect in 15 minutes.
 
-- `ComputeBus` with content keys, priority, cancellation, IndexedDB cache
+- [x] `ComputeBus` core: content keys, priority queue, cancellation by worker termination, cache interface with an in-memory store, transferable results, pool sized `min(core−1, 4)` — 12 tests under `node --test`
+- IndexedDB store, browser worker wiring and the `BUILD_SYSTEM`/`EXPECTED`/`SIMULATE` WASM entry points remain
 - Worker pool, transferable arrays, SIMD/non-SIMD module selection
 - Observatory: 2-D reconstruction, muon rain, exposure scrubbing
 - Detect, Design, Characterise tabs; corner plot; posterior volume
