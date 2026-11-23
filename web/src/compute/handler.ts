@@ -26,6 +26,8 @@ export interface ComputeCore {
     density: Float32Array,
     level?: string,
   ): Float32Array;
+  /** The scene's own density field, for a caller with no override. */
+  sceneDensity(systemKey: string): Float32Array;
   /** Poisson counts at an arbitrary exposure. */
   simulate(expectedKey: string, seed: bigint, exposureSeconds: number): Uint32Array;
 }
@@ -72,6 +74,17 @@ function transferable(array: Float32Array | Uint32Array): ArrayBuffer {
  */
 export function handleTask(core: ComputeCore, request: TaskRequest): TaskEvent {
   const id = request.id;
+  // The core stores every system and every expected-count vector under this
+  // key. A message that arrives without one used to fail deep inside the WASM
+  // glue as `undefined.length`; failing here names the actual problem.
+  if (typeof request.key !== 'string' || request.key.length === 0) {
+    return {
+      id,
+      type: 'error',
+      code: 'request',
+      message: `${request.kind} arrived without a content key: the core stores results by it`,
+    };
+  }
   try {
     switch (request.kind) {
       case 'BUILD_SYSTEM': {
@@ -94,12 +107,13 @@ export function handleTask(core: ComputeCore, request: TaskRequest): TaskEvent {
       }
       case 'EXPECTED': {
         const payload = request.payload as PayloadOf<'EXPECTED'>;
-        const lambda = core.expected(
-          payload.systemKey,
-          request.key,
-          asFloat32(payload.density),
-          payload.level,
-        );
+        // No density in the payload means "the scene as authored": the core
+        // hands back its own field, so the pipeline never grows a second
+        // rasteriser in JavaScript that could disagree with the Rust one.
+        const density = payload.density
+          ? asFloat32(payload.density)
+          : core.sceneDensity(payload.systemKey);
+        const lambda = core.expected(payload.systemKey, request.key, density, payload.level);
         return {
           id,
           type: 'result',

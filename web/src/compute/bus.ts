@@ -391,9 +391,16 @@ export class ComputeBus {
       this.finish(slot, job);
       this.reject(job, new TaskFailure('worker', String(error)));
     };
+    // `key` travels with the task because the core stores its systems and
+    // expected counts by it: the value the broker hashed is the one the worker
+    // must remember, and a message without it leaves the task unnamed.
+    // `priority` stays here — it orders the queue and means nothing to a worker.
     // Input buffers travel the same way results do: transferred, not copied into
     // the worker's heap.
-    slot.handle.postMessage({ id: job.id, kind: job.kind, payload: job.payload }, job.transfer);
+    slot.handle.postMessage(
+      { id: job.id, kind: job.kind, key: job.key, payload: job.payload },
+      job.transfer,
+    );
   }
 
   private receive(slot: Slot, job: Job, event: TaskEvent): void {

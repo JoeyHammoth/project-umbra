@@ -30,6 +30,8 @@ class FakeWorker implements WorkerHandle {
   onerror: ((event: unknown) => void) | null = null;
   terminated = false;
   readonly received: TaskKind[] = [];
+  /** The messages themselves, so a test can assert what the worker was told. */
+  readonly messages: Array<Record<string, unknown>> = [];
 
   private readonly responder: Responder;
 
@@ -40,6 +42,7 @@ class FakeWorker implements WorkerHandle {
   postMessage(message: unknown): void {
     const request = message as { id: string; kind: TaskKind; payload: unknown };
     this.received.push(request.kind);
+    this.messages.push(request as unknown as Record<string, unknown>);
     const reply = async () => {
       if (this.terminated) return;
       const event = await this.responder(request.kind, request.id, request.payload);
@@ -143,6 +146,22 @@ test('changing a scene field invalidates exactly its descendants', async () => {
     await key('SCAN', { countsKey: 'someone-elses-dataset', scalesVoxels: [1, 2] }),
     'a task reading a different dataset must not be invalidated',
   );
+});
+
+test('the worker receives the content key, which is what names its results', async () => {
+  const host = new FakeHost(1, responder);
+  const bus = new ComputeBus({ host });
+  await bus.submit(request('BUILD_SYSTEM', 'build-key-1', { sceneJson: '{}' }));
+
+  const sent = host.spawned[0]!.messages[0]!;
+  assert.equal(sent.kind, 'BUILD_SYSTEM');
+  assert.equal(
+    sent.key,
+    'build-key-1',
+    'the broker hashed this key to cache the result, so the worker must store the system under it too',
+  );
+  assert.deepEqual(sent.payload, { sceneJson: '{}' });
+  bus.close();
 });
 
 test('identical inputs hit the cache instead of the worker', async () => {
