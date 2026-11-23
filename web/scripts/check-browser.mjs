@@ -8,59 +8,93 @@
  * worker has fetched and instantiated the `.wasm`.
  *
  * Usage:
- *   npm run build && npx vite preview --port 4174 &
- *   CHROME_PATH="/c/Program Files/Google/Chrome/Application/chrome.exe" \
- *     node scripts/check-browser.mjs http://localhost:4174/project-umbra/
+ *   npm run build && npm run check:browser
+ *   CHROME_PATH=/path/to/chrome node scripts/check-browser.mjs [url]
+ *
+ * With a `url` argument no server is started: the check points at one already
+ * running. Without it the script serves `dist/` itself, so CI needs one step
+ * and no background process.
  */
 
-import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-const url = process.argv[2] ?? 'http://localhost:4174/project-umbra/';
-const chromePath = process.env.CHROME_PATH ?? 'chrome';
+const webRoot = path.resolve(import.meta.dirname, '..');
+const explicitUrl = process.argv[2];
+const previewPort = Number(process.env.PREVIEW_PORT ?? 4174);
+const url = explicitUrl ?? `http://127.0.0.1:${previewPort}/project-umbra/`;
 const port = Number(process.env.CDP_PORT ?? 9222);
 const profile = mkdtempSync(path.join(tmpdir(), 'umbra-chrome-'));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Console output from the *worker* never reaches the page's CDP session, so
-// Chrome's own stderr log is the only place a worker exception surfaces.
-const logLines = [];
-const chrome = spawn(
-  chromePath,
-  [
-    '--headless=new',
-    '--disable-gpu',
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--enable-logging=stderr',
-    '--v=1',
-    `--remote-debugging-port=${port}`,
-    `--user-data-dir=${profile}`,
-    'about:blank',
-  ],
-  { stdio: ['ignore', 'ignore', 'pipe'] },
-);
-chrome.stderr.on('data', (chunk) => {
-  for (const line of String(chunk).split('\n')) {
-    if (/CONSOLE|Uncaught|TypeError/.test(line)) logLines.push(line.trim());
+/** `CHROME_PATH`, or the first Chrome-like binary on this machine's PATH. */
+function resolveChrome() {
+  const candidates = [
+    process.env.CHROME_PATH,
+    'google-chrome',
+    'chromium',
+    'chromium-browser',
+    'chrome',
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (spawnSync(candidate, ['--version'], { stdio: 'ignore' }).status === 0) return candidate;
   }
-});
+  throw new Error(
+    `no Chrome found; set CHROME_PATH (tried: ${candidates.join(', ')})`,
+  );
+}
+
+/**
+ * Serves `dist/` for the duration of the run and resolves once it answers.
+ * Returns a stop function; `strictPort` makes a busy port an error instead of
+ * a silent move to another one, which would leave the check on the wrong page.
+ */
+async function startPreview() {
+  if (!existsSync(path.join(webRoot, 'dist', 'index.html'))) {
+    throw new Error('dist/ is missing; run `npm run build` first');
+  }
+  // The vite bin runs in this process, so killing it stops the server.
+  const server = spawn(
+    process.execPath,
+    [
+      path.join(webRoot, 'node_modules', 'vite', 'bin', 'vite.js'),
+      'preview',
+      // Explicit IPv4: left to itself vite binds `localhost`, which on a dual
+      // stack host can mean `::1` only, and 127.0.0.1 then refuses.
+      '--host',
+      '127.0.0.1',
+      '--port',
+      String(previewPort),
+      '--strictPort',
+    ],
+    { cwd: webRoot, stdio: ['ignore', 'ignore', 'pipe'] },
+  );
+  let stderr = '';
+  server.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
+  const stop = () => server.kill();
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    if (server.exitCode !== null) {
+      throw new Error(`the preview server exited (${server.exitCode}):\n${stderr}`);
+    }
+    try {
+      if ((await fetch(url)).ok) return stop;
+    } catch {
+      // Not listening yet.
+    }
+    await sleep(200);
+  }
+  stop();
+  throw new Error(`the preview server never answered ${url}\n${stderr}`);
+}
 
 /** Console output from the page and from Chrome itself, for a failed run. */
-const diagnostics = (client) =>
+const diagnostics = (client, logLines) =>
   [...client.consoleLines, ...logLines].map((line) => `  console: ${line}`).join('\n') ||
   '  (no console output)';
-
-const cleanup = () => {
-  chrome.kill();
-  try {
-    rmSync(profile, { recursive: true, force: true });
-  } catch {
-    // Chrome may still hold a file; the temp directory is not worth retrying.
-  }
-};
 
 /** The page target Chrome opens at startup. */
 async function pageTarget() {
@@ -120,66 +154,107 @@ function connect(wsUrl) {
 }
 
 async function main() {
-  const target = await pageTarget();
-  const client = connect(target.webSocketDebuggerUrl);
-  await client.open;
-  await client.send('Runtime.enable');
-  await client.send('Page.enable');
-  await client.send('Page.navigate', { url });
+  const chromePath = resolveChrome();
+  const stopPreview = explicitUrl ? () => {} : await startPreview();
 
-  const expression =
-    "document.querySelector('[data-testid=\"build-status\"]')?.textContent ?? ''";
-  let text = '';
-  for (let attempt = 0; attempt < 240; attempt += 1) {
-    const reply = await client.send('Runtime.evaluate', { expression, returnByValue: true });
-    text = reply.result?.result?.value ?? '';
-    if (text && !text.includes('Assembling')) break;
-    await sleep(250);
-  }
-
-  if (!text || text.includes('Assembling')) {
-    throw new Error(
-      `the build never finished (last status: ${JSON.stringify(text)})\n` +
-        diagnostics(client),
-    );
-  }
-  // The whole boundary, not just the first stage: `Float32Array` and
-  // `Uint32Array` in the status line are λ and the counts as the main thread
-  // received them, after the worker transferred their buffers.
-  if (
-    !/^Assembled \d+ rays × \d+ voxels, \d+ non-zero path lengths · λ Float32Array\(\d+\) · counts Uint32Array\(\d+\), \d+ events/.test(
-      text,
-    )
-  ) {
-    throw new Error(`the build reported a failure: ${text}\n` + diagnostics(client));
-  }
-  // The store is only real if the browser's own IndexedDB holds the result:
-  // the unit tests run against a fake, this runs against the engine.
-  const stored = await client.send('Runtime.evaluate', {
-    expression: `new Promise((resolve, reject) => {
-      const open = indexedDB.open('umbra-compute');
-      open.onerror = () => reject(open.error);
-      open.onsuccess = () => {
-        const request = open.result
-          .transaction('results', 'readonly')
-          .objectStore('results')
-          .count();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      };
-    })`,
-    awaitPromise: true,
-    returnByValue: true,
+  // Console output from the *worker* never reaches the page's CDP session, so
+  // Chrome's own stderr log is the only place a worker exception surfaces.
+  const logLines = [];
+  const isRoot = (process.getuid?.() ?? null) === 0;
+  const chrome = spawn(
+    chromePath,
+    [
+      '--headless=new',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--enable-logging=stderr',
+      '--v=1',
+      // Sandboxing needs a non-root user namespace; a root container has none.
+      ...(isRoot ? ['--no-sandbox'] : []),
+      `--remote-debugging-port=${port}`,
+      `--user-data-dir=${profile}`,
+      'about:blank',
+    ],
+    { stdio: ['ignore', 'ignore', 'pipe'] },
+  );
+  chrome.stderr.on('data', (chunk) => {
+    for (const line of String(chunk).split('\n')) {
+      if (/CONSOLE|Uncaught|TypeError/.test(line)) logLines.push(line.trim());
+    }
   });
-  const records = stored.result?.result?.value;
-  if (typeof records !== 'number' || records < 1) {
-    throw new Error(
-      `the browser's IndexedDB holds no cached result (${JSON.stringify(stored.result)})`,
-    );
-  }
 
-  client.close();
-  return `${text} [indexeddb records: ${records}]`;
+  try {
+    const target = await pageTarget();
+    const client = connect(target.webSocketDebuggerUrl);
+    await client.open;
+    await client.send('Runtime.enable');
+    await client.send('Page.enable');
+    await client.send('Page.navigate', { url });
+
+    const expression =
+      "document.querySelector('[data-testid=\\\"build-status\\\"]')?.textContent ?? ''";
+    let text = '';
+    for (let attempt = 0; attempt < 240; attempt += 1) {
+      const reply = await client.send('Runtime.evaluate', { expression, returnByValue: true });
+      text = reply.result?.result?.value ?? '';
+      if (text && !text.includes('Assembling')) break;
+      await sleep(250);
+    }
+
+    if (!text || text.includes('Assembling')) {
+      throw new Error(
+        `the build never finished (last status: ${JSON.stringify(text)})\n` +
+          diagnostics(client, logLines),
+      );
+    }
+    // The whole boundary, not just the first stage: `Float32Array` and
+    // `Uint32Array` in the status line are λ and the counts as the main thread
+    // received them, after the worker transferred their buffers.
+    if (
+      !/^Assembled \d+ rays × \d+ voxels, \d+ non-zero path lengths · λ Float32Array\(\d+\) · counts Uint32Array\(\d+\), \d+ events/.test(
+        text,
+      )
+    ) {
+      throw new Error(`the build reported a failure: ${text}\n` + diagnostics(client, logLines));
+    }
+    // The store is only real if the browser's own IndexedDB holds the result:
+    // the unit tests run against a fake, this runs against the engine.
+    const stored = await client.send('Runtime.evaluate', {
+      expression: `new Promise((resolve, reject) => {
+        const open = indexedDB.open('umbra-compute');
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const request = open.result
+            .transaction('results', 'readonly')
+            .objectStore('results')
+            .count();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        };
+      })`,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    const records = stored.result?.result?.value;
+    if (typeof records !== 'number' || records < 1) {
+      throw new Error(
+        `the browser's IndexedDB holds no cached result (${JSON.stringify(stored.result)}\n` +
+          diagnostics(client, logLines),
+      );
+    }
+
+    client.close();
+    return `${text} [indexeddb records: ${records}]`;
+  } finally {
+    chrome.kill();
+    stopPreview();
+    try {
+      rmSync(profile, { recursive: true, force: true });
+    } catch {
+      // Chrome may still hold a file; the temp directory is not worth retrying.
+    }
+  }
 }
 
 try {
@@ -188,6 +263,4 @@ try {
 } catch (error) {
   console.error(`browser round trip FAILED: ${error.message}`);
   process.exitCode = 1;
-} finally {
-  cleanup();
 }
