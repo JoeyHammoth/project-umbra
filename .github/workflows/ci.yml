@@ -112,6 +112,13 @@ jobs:
       - name: Typecheck and build
         run: npm run build
 
+      # The unit tests run the boundary against fakes. This runs it in Chrome:
+      # a worker that cannot load, a transfer list that drops the buffers or an
+      # IndexedDB that never stores anything would otherwise only be visible by
+      # eye. `ubuntu-latest` ships Chrome, so the check finds it on PATH.
+      - name: Browser round trip
+        run: npm run check:browser
+
   # Spec §7 publishes the calibration report as an artifact: the LEE curve, its
   # agreement with the Monte Carlo tail, and the seeds that produced both.
   lee-calibration:

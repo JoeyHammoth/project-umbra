@@ -89,7 +89,7 @@ can respect in 15 minutes.
 - [x] `ComputeBus` core: content keys, priority queue, cancellation by worker termination, cache interface with an in-memory store, transferable results, pool sized `min(core−1, 4)` — 12 tests under `node --test`
 - [x] `BUILD_SYSTEM`/`EXPECTED`/`SIMULATE` WASM entry points: `umbra_wasm::Core` holds the systems and per-second rates, the façade returns `Float32Array`/`Uint32Array`, and `web/src/compute/handler.ts` forwards those buffers in a transfer list
 - [x] Browser wiring: `workers.ts` spawns module workers running `worker.ts`, which loads the module and refuses one whose `api_version` disagrees; the landing page runs `BUILD_SYSTEM` → `EXPECTED` → `SIMULATE` through the bus
-- [x] `CacheStore` over IndexedDB (`web/src/compute/cache.ts`), with `MemoryCache` as the fallback when storage is unavailable; `web/scripts/check-browser.mjs` drives headless Chrome over CDP and asserts both the typed arrays and the stored record
+- [x] `CacheStore` over IndexedDB (`web/src/compute/cache.ts`), with `MemoryCache` as the fallback when storage is unavailable; `web/scripts/check-browser.mjs` drives headless Chrome over CDP and asserts both the typed arrays and the stored record — and the CI web job runs that check after the build, so a worker that cannot load, a transfer list that drops the buffers or a store that never writes fails the build instead of being caught by eye
 - Worker pool, transferable arrays, SIMD/non-SIMD module selection
 - Observatory: 2-D reconstruction, muon rain, exposure scrubbing
 - Detect, Design, Characterise tabs; corner plot; posterior volume

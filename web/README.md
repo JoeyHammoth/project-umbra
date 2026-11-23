@@ -9,6 +9,7 @@ npm run build:wasm   # crates/umbra-wasm -> src/wasm/, gitignored
 npm run dev          # http://localhost:5173/project-umbra/
 npm run typecheck
 npm run build        # build:wasm, then tsc, then vite
+npm run check:browser # build first: headless Chrome over CDP drives the real bundle
 ```
 
 `npm run build:wasm` needs the `wasm32-unknown-unknown` target and a
@@ -37,6 +38,12 @@ change, and bump `API_VERSION` when the contract breaks.
 
 `bus.ts`, `handler.ts` and `cache.ts` are tested under `node --test`
 (`npm test`); `worker.ts` needs a browser because it fetches a `.wasm` module.
+That is `scripts/check-browser.mjs`: it starts `vite preview` on `dist/`, points
+headless Chrome at the page over CDP, waits for the worker's reply, and checks
+that the main thread holds real `Float32Array`/`Uint32Array` results and that
+Chrome's own IndexedDB has the record. It takes `CHROME_PATH` (default: scan the
+PATH for `google-chrome`/`chromium`) and an optional URL to skip starting a
+server. CI runs it in the web job, so a broken boundary fails the build.
 
 The heavy layers (Three.js, uPlot, ONNX) are not installed yet; they arrive as
 lazy chunks so the landing route stays inside its 250 KB gzip budget.
