@@ -7,6 +7,7 @@
 
 pub mod laplace;
 pub mod lee;
+pub mod profile;
 pub mod scan;
 
 pub use laplace::{
@@ -15,6 +16,10 @@ pub use laplace::{
 pub use lee::{
     euler_characteristic_2d, euler_characteristic_3d, lee_calibrate, lee_toy, LeeCalibration,
     LeeConfig, ToyResult,
+};
+pub use profile::{
+    profile_candidate, profile_p, CandidateProfile, NuisanceFit, NuisancePrior, ProfilerConfig,
+    SystematicsReport,
 };
 pub use scan::{
     chi2_mixture_p, refine_lrt, scan, statistics, z_map, ScanCandidate, ScanConfig, ScanProblem,
