@@ -94,6 +94,21 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      # `npm run build` compiles the compute core to WASM first, so the web job
+      # needs the same target and a `wasm-bindgen` that matches Cargo.lock.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-bindgen
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.130
+
       - name: Typecheck and build
         run: npm run build
 

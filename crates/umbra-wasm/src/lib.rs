@@ -219,6 +219,22 @@ impl Core {
         Ok(evaluated.lambda)
     }
 
+    /// The scene's own voxel field: what `EXPECTED` evaluates when the caller
+    /// has no override.
+    ///
+    /// Exposed so a client can run the pipeline for the scene as authored
+    /// without re-implementing the rasteriser in JavaScript, where it would
+    /// drift from the one the physics is tested against.
+    pub fn scene_density(&self, system_key: &str) -> Result<Vec<f32>, CoreError> {
+        match self.systems.get(system_key) {
+            Some(stored) => Ok(stored.scene.density()),
+            None => Err(CoreError::new(
+                "unknown_system",
+                format!("no system for key `{system_key}`: run BUILD_SYSTEM first"),
+            )),
+        }
+    }
+
     /// `SIMULATE`: Poisson counts at an arbitrary exposure.
     ///
     /// Counts are drawn per ray from a stream keyed by `(seed, scene, ray)`, so
@@ -373,6 +389,15 @@ impl ComputeCore {
             .map_err(fault)
     }
 
+    /// The scene's own density field, as a `Float32Array`.
+    ///
+    /// The caller passes it straight back to `expected`, so the pipeline never
+    /// needs a JavaScript rasteriser to disagree with the Rust one.
+    #[wasm_bindgen(js_name = sceneDensity)]
+    pub fn scene_density(&self, system_key: &str) -> Result<Vec<f32>, JsValue> {
+        self.core.scene_density(system_key).map_err(fault)
+    }
+
     /// `SIMULATE`: counts at `exposure_s`, as a `Uint32Array`.
     #[wasm_bindgen(js_name = simulate)]
     pub fn simulate(
@@ -504,6 +529,27 @@ mod tests {
             .expect("L1");
         assert_ne!(l0, l1, "the level must select a different model");
         assert_eq!(core.system_count(), 1, "the operator is level-independent");
+    }
+
+    #[test]
+    fn the_scene_density_is_the_one_the_loader_built() {
+        let text = scene_json(100.0, 8, 2);
+        let mut core = Core::new();
+        core.build_system("sys", &text).expect("build");
+        let density = core.scene_density("sys").expect("density");
+        assert_eq!(density, scene(100.0, 8, 2).density());
+        assert_eq!(density.len(), 256, "16 x 16 voxels");
+        // The slab fills part of the grid; air outside it is a real zero, so a
+        // field that is uniformly positive would mean the rasteriser is wrong.
+        assert!(
+            density.iter().any(|value| *value > 1.0),
+            "the slab must be dense"
+        );
+        assert!(density.contains(&0.0), "air must be zero");
+        assert_eq!(
+            core.scene_density("nope").expect_err("unknown").code,
+            "unknown_system"
+        );
     }
 
     #[test]

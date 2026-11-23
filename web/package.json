@@ -6,10 +6,11 @@
   "description": "Browser front end for UMBRA, the muon-tomography observatory",
   "license": "MIT",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "dev": "node scripts/build-wasm.mjs && vite",
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "build": "npm run build:wasm && tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/compute/bus.test.ts src/compute/handler.test.ts",
+    "test": "node --test src/compute/bus.test.ts src/compute/handler.test.ts src/compute/cache.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -21,6 +22,7 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^6.3.0",
+    "fake-indexeddb": "^6.2.8",
     "typescript": "^7.0.2",
     "vite": "^8.3.8"
   }

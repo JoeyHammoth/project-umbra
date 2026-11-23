@@ -29,12 +29,19 @@ class FakeCore implements ComputeCore {
   readonly calls: string[] = [];
   lambda = new Float32Array([1.5, 2.5, 3.5]);
   counts = new Uint32Array([7, 8, 9]);
+  density = new Float32Array([2.65, 2.65]);
   failure: unknown = null;
 
   buildSystem(systemKey: string, sceneJson: string) {
     this.throwIfFailing();
     this.calls.push(`build ${systemKey} ${sceneJson}`);
     return { systemKey, rows: 4, cols: 9, nnz: 12 };
+  }
+
+  sceneDensity(systemKey: string): Float32Array {
+    this.throwIfFailing();
+    this.calls.push(`scene-density ${systemKey}`);
+    return this.density;
   }
 
   expected(
@@ -95,6 +102,20 @@ test('expected hands back the very buffer the worker allocated', () => {
   assert.deepEqual(core.calls, ['expected sys content-key 2 L1']);
 });
 
+test('expected without a density evaluates the scene the worker already built', () => {
+  const core = new FakeCore();
+  const event = handleTask(core, request('EXPECTED', { systemKey: 'sys', level: 'L1' }));
+
+  const { result, transfer } = asResult<{ lambda: Float32Array }>(event);
+  assert.equal(result.lambda, core.lambda);
+  assert.equal(transfer?.[0], result.lambda.buffer);
+  assert.deepEqual(
+    core.calls,
+    ['scene-density sys', 'expected sys content-key 2 L1'],
+    'the scene field is fetched, then evaluated',
+  );
+});
+
 test('a density view that is not a Float32Array is reinterpreted, not copied', () => {
   const core = new FakeCore();
   const bytes = new Float32Array([2.65, 1.5]).buffer;
@@ -120,6 +141,16 @@ test('simulate transfers its counts and passes the seed as a BigInt', () => {
   assert.equal(result.counts, core.counts);
   assert.equal(transfer?.[0], result.counts.buffer);
   assert.deepEqual(core.calls, ['simulate exp 18446744073709551615 60']);
+});
+
+test('a task that lost its content key is a coded error, not a TypeError', () => {
+  const core = new FakeCore();
+  const event = handleTask(core, { ...request('BUILD_SYSTEM', { sceneJson: '{}' }), key: '' });
+
+  const { code, message } = asError(event);
+  assert.equal(code, 'request');
+  assert.match(message, /content key/);
+  assert.deepEqual(core.calls, [], 'nothing reaches the core unnamed');
 });
 
 test('a task with no entry point is an error event, not a thrown exception', () => {

@@ -47,7 +47,12 @@ export interface Payloads {
    * text as `web/src/scenes/default.json`. See `SceneSpec::from_json_str`.
    */
   BUILD_SYSTEM: { sceneJson: string };
-  EXPECTED: { systemKey: string; density: ArrayBufferView; level: FidelityLevel };
+  /**
+   * `density` is an override, in g cm⁻³. Omitted, the core evaluates the scene
+   * it built — so a client never needs its own rasteriser. `level` likewise
+   * defaults to the scene's own fidelity.
+   */
+  EXPECTED: { systemKey: string; density?: ArrayBufferView; level?: FidelityLevel };
   SIMULATE: { expectedKey: string; seed: string; exposureSeconds: number };
   RECON: {
     countsKey: string;
