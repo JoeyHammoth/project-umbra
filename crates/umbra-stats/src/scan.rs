@@ -295,6 +295,10 @@ where
     // A band has to hold its gathered entries in cache: the 2-D scene is wide in
     // x and short in y, the 3-D one is a plane per slice, so the two want very
     // different heights.
+    // Band heights of 4, 8, 16 and 32 rows measured within noise of each other
+    // on the 2-D scene, so this is sized for the read pattern rather than tuned
+    // to a cache: the 2-D grid is wide in x and short in y, the 3-D one is a
+    // plane per slice.
     let height = if dim == 3 { 2 } else { 32 };
 
     if dim == 2 {
@@ -311,13 +315,13 @@ where
                 [0, lo, 0],
                 &weights,
             );
+            let stencils = stencils(&bank, nx, ny);
             for y in y0..y1 {
                 for x in 0..nx {
                     let cell = [x, y - lo, 0];
                     let voxel = y * nx + x;
-                    for (s, scale) in bank.scales.iter().enumerate() {
-                        let Some((u, i)) =
-                            band.candidate(&back, problem.density, &scale.offsets, cell)
+                    for (s, stencil) in stencils.iter().enumerate() {
+                        let Some((u, i)) = band.candidate(&back, problem.density, stencil, cell)
                         else {
                             continue;
                         };
@@ -341,14 +345,15 @@ where
                 [0, 0, lo],
                 &weights,
             );
+            let stencils = stencils(&bank, nx, ny);
             for z in z0..z1 {
                 for y in 0..ny {
                     for x in 0..nx {
                         let cell = [x, y, z - lo];
                         let voxel = (z * ny + y) * nx + x;
-                        for (s, scale) in bank.scales.iter().enumerate() {
+                        for (s, stencil) in stencils.iter().enumerate() {
                             let Some((u, i)) =
-                                band.candidate(&back, problem.density, &scale.offsets, cell)
+                                band.candidate(&back, problem.density, stencil, cell)
                             else {
                                 continue;
                             };
@@ -688,6 +693,15 @@ fn record(
     if !z.is_finite() {
         return;
     }
+    // Both tests come before the amplitude. It is a division, and it is never
+    // read for a candidate that is neither the peak nor kept in the top-k —
+    // which is all but a handful of a million.
+    let top_k = cfg.top_k.max(1);
+    let keeps = best.len() < top_k || z > best.last().map_or(f32::NEG_INFINITY, |c| c.z);
+    let peaks = peak.as_ref().is_none_or(|p| z > p.z);
+    if !keeps && !peaks {
+        return;
+    }
     let candidate = ScanCandidate {
         voxel,
         scale: scale as u8,
@@ -702,10 +716,12 @@ fn record(
         // `exp` per voxel for nothing.
         local_p: 0.5,
     };
-    if peak.as_ref().is_none_or(|p| candidate.z > p.z) {
+    if peaks {
         *peak = Some(candidate);
     }
-    insert(best, candidate, cfg.top_k.max(1));
+    if keeps {
+        insert(best, candidate, top_k);
+    }
 }
 
 /// A band of candidates with its footprint cells gathered once.
@@ -721,19 +737,37 @@ struct Band {
     origin: [usize; 3],
     nx: usize,
     ny: usize,
-    /// Cell offsets into `rays`/`lens`: one more than the number of box cells.
-    start: Vec<u32>,
+    /// Each cell's entry range as `from | to << 32`.
+    ///
+    /// Packed so a footprint cell costs one load, not two. The tap loop reads
+    /// this once per cell, out of an array of hundreds of kilobytes, and two
+    /// dependent loads there were most of the scan's cost.
+    range: Vec<u64>,
     /// `(local accumulator, chord length in cm)` per gathered entry, packed so
     /// the inner loop is one load per entry.
     entry: Vec<(u32, f32)>,
+    /// The same entries for every cell at a fixed stride, `(u32::MAX, 0.0)` past
+    /// the end.
+    ///
+    /// Most scenes put one or two rays through a cell, and storing those inline
+    /// turns a footprint cell into one dependent load instead of two: the range
+    /// lookup disappears, and so does the branch that follows it. `stride` is
+    /// zero when the band is too dense for that (a cone-beam cell can carry tens
+    /// of rays) and the `range`/`entry` pair is in use instead.
+    entry_at: Vec<(u32, f32)>,
+    stride: usize,
     /// Global ray of each local accumulator.
     lray: Vec<u32>,
     /// `D²/λ⁰` per local accumulator.
     lweight: Vec<f32>,
     /// Global ray to local accumulator, `u32::MAX` until a ray is gathered.
     local: Vec<u32>,
-    stamp: Vec<u32>,
-    delta: Vec<f32>,
+    /// `(generation, partial Δ)` per local accumulator.
+    ///
+    /// One array rather than a stamp beside a value: the tap loop then touches
+    /// one cache line per ray instead of two.
+    acc: Vec<(u32, f32)>,
+    /// Accumulators touched by the current candidate, at most one entry each.
     touched: Vec<u32>,
     gen: u32,
 }
@@ -745,13 +779,14 @@ impl Band {
             origin: [0; 3],
             nx: 0,
             ny: 0,
-            start: Vec::new(),
+            range: Vec::new(),
             entry: Vec::new(),
+            entry_at: Vec::new(),
+            stride: 0,
             lray: Vec::new(),
             lweight: Vec::new(),
             local: Vec::new(),
-            stamp: Vec::new(),
-            delta: Vec::new(),
+            acc: Vec::new(),
             touched: Vec::new(),
             gen: 0,
         }
@@ -773,13 +808,13 @@ impl Band {
         };
         self.nx = nx;
         self.ny = ny;
-        self.start.clear();
-        self.start.push(0);
+        self.range.clear();
         self.entry.clear();
         self.lray.clear();
         self.lweight.clear();
         self.local.clear();
         self.local.resize(weights.len(), u32::MAX);
+        let mut from = 0u32;
         for z in 0..dims[2] {
             for y in 0..dims[1] {
                 for x in 0..dims[0] {
@@ -800,16 +835,57 @@ impl Band {
                         }
                         self.entry.push((id, transposed.data[position]));
                     }
-                    self.start.push(self.entry.len() as u32);
+                    let to = self.entry.len() as u32;
+                    self.range.push(u64::from(from) | (u64::from(to) << 32));
+                    from = to;
                 }
             }
         }
+        // Densest cell decides the layout. The pass reads only `indptr`, which
+        // the fill below already streams.
+        let cells = dims[0] * dims[1] * dims[2];
+        let mut widest = 0usize;
+        for z in 0..dims[2] {
+            for y in 0..dims[1] {
+                let row = ((origin[2] + z) * ny + (origin[1] + y)) * nx + origin[0];
+                for x in 0..dims[0] {
+                    let index = row + x;
+                    let len = (transposed.indptr[index + 1] - transposed.indptr[index]) as usize;
+                    widest = widest.max(len);
+                }
+            }
+        }
+        let stride = if widest <= COMPACT_STRIDE {
+            widest.max(1)
+        } else {
+            0
+        };
+        self.stride = stride;
+        if stride == 0 {
+            self.entry_at.clear();
+        } else {
+            self.entry_at.clear();
+            self.entry_at.resize(cells * stride, (u32::MAX, 0.0));
+            for cell in 0..cells {
+                let packed = self.range[cell];
+                let from = packed as u32 as usize;
+                let to = (packed >> 32) as usize;
+                for (k, entry) in self.entry[from..to].iter().enumerate() {
+                    self.entry_at[cell * stride + k] = *entry;
+                }
+            }
+            self.entry.clear();
+            self.range.clear();
+        }
+
         let entries = self.lray.len();
-        self.stamp.clear();
-        self.stamp.resize(entries, 0);
-        self.delta.clear();
-        self.delta.resize(entries, 0.0);
+        self.acc.clear();
+        self.acc.resize(entries, (0, 0.0));
+        // Sized to the accumulator count, so the tap loop's write can never
+        // reallocate: a grow in there forces the compiler to reload the
+        // accumulator pointer after every push, and this loop is the scan.
         self.touched.clear();
+        self.touched.resize(entries, 0);
         self.gen = 0;
     }
 
@@ -818,61 +894,188 @@ impl Band {
         &mut self,
         back: &[f32],
         density: &[f32],
-        offsets: &[(i32, i32, i32, f32)],
+        stencil: &Stencil,
         cell: [usize; 3],
     ) -> Option<(f64, f32)> {
+        // What the tap loop needs is copied out of `self` first. Leaving the
+        // strides behind a `&mut self` that the loop writes through made the
+        // compiler reload them on every tap.
+        let (nx, ny) = (self.nx, self.ny);
+        let dims = self.dims;
+        let origin = self.origin;
+        let base =
+            (((origin[2] + cell[2]) * ny + origin[1] + cell[1]) * nx + origin[0] + cell[0]) as i32;
+        let pos0 = ((cell[2] * dims[1] + cell[1]) * dims[0] + cell[0]) as i32;
+
         self.gen = self.gen.wrapping_add(1);
         if self.gen == 0 {
-            self.stamp.iter_mut().for_each(|stamp| *stamp = 0);
+            for slot in &mut self.acc {
+                slot.0 = 0;
+            }
             self.gen = 1;
         }
-        self.touched.clear();
-        let mut u = 0.0f64;
-        for &(dx, dy, dz, weight) in offsets {
-            let x = cell[0] as i32 + dx;
-            let y = cell[1] as i32 + dy;
-            let z = cell[2] as i32 + dz;
+        let gen = self.gen;
+
+        let Band {
+            range,
+            entry,
+            entry_at,
+            stride,
+            lweight,
+            acc,
+            touched,
+            ..
+        } = self;
+        let stride = *stride;
+        let mut sums = Sums {
+            gen,
+            acc,
+            touched,
+            len: 0,
+        };
+        let mut u = 0.0f32;
+
+        for tap in &stencil.taps {
+            let x = cell[0] as i32 + tap.dx;
+            let y = cell[1] as i32 + tap.dy;
+            let z = cell[2] as i32 + tap.dz;
             if x < 0
                 || y < 0
                 || z < 0
-                || x >= self.dims[0] as i32
-                || y >= self.dims[1] as i32
-                || z >= self.dims[2] as i32
+                || x >= dims[0] as i32
+                || y >= dims[1] as i32
+                || z >= dims[2] as i32
             {
                 continue;
             }
-            let (x, y, z) = (x as usize, y as usize, z as usize);
-            let index = ((self.origin[2] + z) * self.ny + (self.origin[1] + y)) * self.nx
-                + self.origin[0]
-                + x;
-            u += f64::from(weight) * f64::from(back[index]);
-            let removed = density[index] * weight;
-            if removed == 0.0 {
-                continue;
-            }
-            let position = (z * self.dims[1] + y) * self.dims[0] + x;
-            let start = self.start[position] as usize;
-            let end = self.start[position + 1] as usize;
-            for &(id, len) in &self.entry[start..end] {
-                let id = id as usize;
-                if self.stamp[id] != self.gen {
-                    self.stamp[id] = self.gen;
-                    self.delta[id] = 0.0;
-                    self.touched.push(id as u32);
+            let index = (base + tap.d) as usize;
+            u += tap.weight * back[index];
+            let removed = density[index] * tap.weight;
+            if removed != 0.0 {
+                let position = (pos0 + tap.d) as usize;
+                if stride == 0 {
+                    sums.add(range, entry, position, removed);
+                } else {
+                    sums.add_at(entry_at, stride, position, removed);
                 }
-                self.delta[id] += len * removed;
             }
         }
+
         let mut i = 0.0f32;
-        for &entry in &self.touched {
-            let delta = self.delta[entry as usize];
-            i += delta * delta * self.lweight[entry as usize];
+        for &id in &sums.touched[..sums.len] {
+            let (_, delta) = sums.acc[id as usize];
+            i += delta * delta * lweight[id as usize];
         }
         if i <= 0.0 || !i.is_finite() || !u.is_finite() {
             return None;
         }
-        Some((u, i))
+        Some((f64::from(u), i))
     }
+}
+
+/// Most rays a cell may carry while the band still stores its entries inline.
+///
+/// Two covers the parallel and fan-beam scenes that budget cares about at
+/// `8`/`16` bytes per cell; past that the band keeps the compact-by-count
+/// layout instead, because the stride would multiply memory by the ray density.
+const COMPACT_STRIDE: usize = 2;
+
+/// The per-candidate partial sums, gathered by ray.
+///
+/// `touched` is sized to the accumulator count at band build, and a ray is
+/// pushed at most once per generation, so the write cannot run past it.
+struct Sums<'a> {
+    gen: u32,
+    acc: &'a mut [(u32, f32)],
+    touched: &'a mut [u32],
+    len: usize,
+}
+
+impl Sums<'_> {
+    /// `Δ_r += chord · removed` for one ray, opening a fresh accumulator the
+    /// first time the current candidate sees it.
+    #[inline]
+    fn touch(&mut self, id: u32, len: f32, removed: f32) {
+        let id = id as usize;
+        let slot = &mut self.acc[id];
+        if slot.0 != self.gen {
+            slot.0 = self.gen;
+            slot.1 = 0.0;
+            self.touched[self.len] = id as u32;
+            self.len += 1;
+        }
+        slot.1 += len * removed;
+    }
+
+    /// Adds a footprint cell from the range/entry layout.
+    #[inline]
+    fn add(&mut self, range: &[u64], entry: &[(u32, f32)], position: usize, removed: f32) {
+        let packed = range[position];
+        let from = packed as u32 as usize;
+        let to = (packed >> 32) as usize;
+        for &(id, len) in &entry[from..to] {
+            self.touch(id, len, removed);
+        }
+    }
+
+    /// Adds a footprint cell from the fixed-stride layout.
+    #[inline]
+    fn add_at(&mut self, entry: &[(u32, f32)], stride: usize, position: usize, removed: f32) {
+        let base = position * stride;
+        for &(id, len) in &entry[base..base + stride] {
+            if id == u32::MAX {
+                break;
+            }
+            self.touch(id, len, removed);
+        }
+    }
+}
+
+/// Pre-added tap offsets of one scale inside one band.
+///
+/// A band is a full-width slab of the grid, so its row strides are the grid's
+/// (`dims[0] == nx`, `dims[1] == ny`) and one packed offset serves both the
+/// band's cell numbering and the global voxel numbering. Adding it replaces a
+/// three-index address computation per tap.
+#[derive(Debug, Clone, Default)]
+struct Stencil {
+    taps: Vec<Tap>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Tap {
+    dx: i32,
+    dy: i32,
+    dz: i32,
+    /// `dz·ny·nx + dy·nx + dx`.
+    d: i32,
+    weight: f32,
+}
+
+impl Stencil {
+    fn new(offsets: &[(i32, i32, i32, f32)], nx: usize, ny: usize) -> Self {
+        let stride_y = nx as i32;
+        let stride_z = ny as i32 * stride_y;
+        let taps = offsets
+            .iter()
+            .map(|&(dx, dy, dz, weight)| Tap {
+                dx,
+                dy,
+                dz,
+                d: dz * stride_z + dy * stride_y + dx,
+                weight,
+            })
+            .collect();
+        Self { taps }
+    }
+}
+
+/// The band's taps for every scale, pre-added once per band.
+fn stencils(bank: &TemplateBank, nx: usize, ny: usize) -> Vec<Stencil> {
+    bank.scales
+        .iter()
+        .map(|scale| Stencil::new(&scale.offsets, nx, ny))
+        .collect()
 }
 
 /// Poisson log-likelihood over the rays a template touches, at amplitude `alpha`.
@@ -1278,6 +1481,18 @@ mod tests {
         let p = problem(&system, &counts, &lambda0, &dlambda_dx, &density);
         let cfg = ScanConfig::default();
         let bank = TemplateBank::new(&system.grid, &cfg.scales_voxels);
+        // One ray per cell is the compact layout; assert that is the path under
+        // test rather than whichever one the geometry happened to pick.
+        let transposed = transpose(&system.l, system.voxel_count());
+        let mut band = Band::new();
+        band.build(
+            &transposed,
+            &system.grid,
+            [10, 10, 1],
+            [0, 0, 0],
+            &vec![1.0; system.ray_count()],
+        );
+        assert_eq!(band.stride, 1, "expected the compact layout");
         let result = scan(&p, &cfg);
         assert!(!result.candidates.is_empty(), "no candidates");
         for candidate in &result.candidates {
@@ -1287,6 +1502,78 @@ mod tests {
             assert!(
                 (candidate.z - z).abs() <= 1.0e-5 * z.abs().max(1.0),
                 "voxel {} scale {}: banded {}, standalone {z}",
+                candidate.voxel,
+                candidate.scale,
+                candidate.z
+            );
+        }
+    }
+
+    #[test]
+    fn the_dense_band_layout_agrees_with_the_standalone_statistic() {
+        // Four rays through the same cells is denser than the band stores inline,
+        // so this scene keeps the range/entry layout. Both layouts must produce
+        // the same score; the band only changes where the entries are read from.
+        let grid = Grid2::new([10, 10], [0.0, 0.0], 0.1);
+        let mut indptr = vec![0u32];
+        let mut indices = Vec::new();
+        let mut data = Vec::new();
+        let mut density = vec![2.65f32; 100];
+        for j in 4..6 {
+            for i in 4..6 {
+                density[j * 10 + i] = 0.5;
+            }
+        }
+        for _ in 0..4 {
+            for i in 0..10usize {
+                indices.push((5 * 10 + i) as u32);
+                data.push(0.5f32);
+            }
+            indptr.push(indices.len() as u32);
+        }
+        let system = System {
+            l: Csr::new(indptr, indices, data),
+            rays: (0..4)
+                .map(|_| RayCell {
+                    det: 0,
+                    zen: 0.0,
+                    az: 0.0,
+                    k_scale: 1.0,
+                })
+                .collect(),
+            grid: GridAny::Two(grid),
+        };
+        let opacity = system.opacity(&density);
+        let lambda0: Vec<f32> = opacity
+            .iter()
+            .map(|&x| LAMBDA * (-x / 1000.0).exp())
+            .collect();
+        let dlambda_dx: Vec<f32> = lambda0.iter().map(|&l| -l / 1000.0).collect();
+        let counts: Vec<f32> = lambda0.iter().map(|l| l * 1.02).collect();
+        let p = problem(&system, &counts, &lambda0, &dlambda_dx, &density);
+
+        let transposed = transpose(&system.l, system.voxel_count());
+        let mut band = Band::new();
+        band.build(
+            &transposed,
+            &system.grid,
+            [10, 10, 1],
+            [0, 0, 0],
+            &vec![1.0; system.ray_count()],
+        );
+        assert_eq!(band.stride, 0, "four rays per cell take the dense path");
+
+        let cfg = ScanConfig::default();
+        let bank = TemplateBank::new(&system.grid, &cfg.scales_voxels);
+        let result = scan(&p, &cfg);
+        assert!(!result.candidates.is_empty(), "the lit row still scores");
+        for candidate in &result.candidates {
+            let (u, i) = statistics(&p, &bank, candidate.scale as usize, candidate.voxel)
+                .expect("a kept candidate has support");
+            let z = (u / i.sqrt()) as f32;
+            assert!(
+                (candidate.z - z).abs() <= 1.0e-5 * z.abs().max(1.0),
+                "voxel {} scale {}: dense {}, standalone {z}",
                 candidate.voxel,
                 candidate.scale,
                 candidate.z

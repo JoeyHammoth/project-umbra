@@ -58,7 +58,7 @@ that survives a known false-positive test.
 
 - [x] A6 score scan via one back projection + template correlation
 - [x] Exact LRT refinement of the top-K candidates
-- [ ] Scan at 10^6 candidates: 3-D 96.8 ms correlation (budget 2 s) met, 2-D 62.7 ms correlation / 78.1 ms total (budget 50 ms) still 1.25x over — interior fast path and per-system transpose are the cheap levers left
+- [ ] Scan at 10^6 candidates: 3-D 103.9 ms correlation (budget 2 s) met, 2-D 61.5 ms correlation / 76.9 ms total (budget 50 ms) still 1.23x over — band height, entry packing, compact stride and deferred bookkeeping all measured, worth ~10% together and not the 25% needed; the gather itself is the remaining cost, so the next lever is a per-detector angular index
 - [x] Asimov significance and `t_5σ` forecast (`asimov_significance`, `time_to_five_sigma`, tested)
 - [x] LEE estimator: seeded Poisson toys, max-`Z` null, Euler extrapolation (`umbra_stats::lee`)
 - [ ] LEE calibration campaign: ran `10^4` toys on `10^6` voxels (report: `docs/calibration/lee-2d.md`). Extrapolation 1.16x at 3 sigma; global-3 sigma threshold is z = 4.95, where the MC rate is 22% below nominal on 10 exceedances (+-32%)

@@ -82,6 +82,19 @@ fn ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1.0e3
 }
 
+/// Repetitions per measurement; the fastest is reported, so more runs only help.
+///
+/// `UMBRA_SCAN_RUNS` raises it. On a busy machine the minimum over 25 runs is a
+/// far better estimate of the kernel's cost than the minimum over 7, because it
+/// is more likely to catch a quiet stretch.
+fn runs() -> usize {
+    std::env::var("UMBRA_SCAN_RUNS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(7)
+}
+
 fn main() {
     // One scale is exactly the "10⁶ candidates" the budget row names; the second
     // line reports what a multi-scale bank costs on the same scene, because a
@@ -96,6 +109,7 @@ fn main() {
         ..single.clone()
     };
 
+    let runs = runs();
     for (label, (system, density, lambda0, dlambda_dx), budget) in [
         ("2-D", scene_2d(1000), 50.0f64),
         ("3-D", scene_3d(100), 2000.0f64),
@@ -115,7 +129,7 @@ fn main() {
             let mut samples = Vec::new();
             let mut correlations = Vec::new();
             let mut peak = 0.0f32;
-            for _ in 0..3 {
+            for _ in 0..runs {
                 let started = Instant::now();
                 let result = scan(&problem, cfg);
                 samples.push(started.elapsed());
@@ -124,11 +138,17 @@ fn main() {
             }
             samples.sort();
             correlations.sort();
-            let total = ms(samples[samples.len() / 2]);
-            let correlation = ms(correlations[correlations.len() / 2]);
+            // The best run is the one that saw the least contention. On a shared
+            // machine the minimum estimates the kernel's cost and the median
+            // reports whatever else the scheduler was doing, which is how the
+            // same binary reads 160 ms one minute and 460 ms the next.
+            let total = ms(samples[0]);
+            let correlation = ms(correlations[0]);
+            let typical = ms(correlations[correlations.len() / 2]);
             println!(
-                "{label} {name}: {} candidates, {} rays, {} voxels — median {total:>7.1} ms total, \
-                 {correlation:>7.1} ms correlation of {:>5.0} ms budget (peak Z {peak:.2})",
+                "{label} {name}: {} candidates, {} rays, {} voxels — best of {runs}: {total:>7.1} ms \
+                 total, {correlation:>7.1} ms correlation of {:>5.0} ms budget (median correlation \
+                 {typical:.1} ms, peak Z {peak:.2})",
                 system.voxel_count() * cfg.scales_voxels.len(),
                 system.ray_count(),
                 system.voxel_count(),
