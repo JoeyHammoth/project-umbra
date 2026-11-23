@@ -141,9 +141,17 @@ parallel rays through every voxel — the friendliest geometry the gather can me
 
 ```text
                 total      correlation      spec budget
-2-D 1e6 cands   78.1 ms      62.7 ms          50 ms    MISSED (1.25x)
-3-D 1e6 cands  118.9 ms      96.8 ms        2000 ms    met
+2-D 1e6 cands   76.9 ms      61.5 ms          50 ms    MISSED (1.23x)
+3-D 1e6 cands  131.9 ms     103.9 ms        2000 ms    met (19x under)
 ```
+
+Both were read with `UMBRA_SCAN_RUNS=25`; the bench reports the fastest of `N`
+because on a busy machine the median reports the scheduler. The 2-D row comes
+from a window in which the untouched `setup` stage — the transpose and the back
+projection, which no optimisation in this section touched — ran at its reference
+15.4 ms. The 3-D row comes from a window 1.3x slower than that, so 103.9 ms is
+an upper bound and its budget is met either way. The 2-D number gets no such
+excuse: at reference conditions it is 61.5 ms.
 
 §6.5 budgets the *scan correlation*, so `ScanResult::timing` splits the two
 stages: `setup` is the transpose of `L` and the back projection (≈15 ms at `10⁶`
@@ -159,14 +167,30 @@ accumulators keep a ray that crosses several footprint cells as one `Δ_i` —
 squaring its per-cell parts separately inflates `I`, and a test comparing the
 banded scan against the single-candidate path exists because that bug happened.
 
-Banding bought 154 → 62.7 ms on the budgeted stage. The rest is per-candidate
-arithmetic, not memory: six axis comparisons, an index, and two loads per
-footprint cell, five cells per candidate at radius 1. Two levers remain, both
-cheap relative to the angular index: an interior fast path that drops the
-bounds checks for candidates further than `reach` from the grid edge, and a
-transpose built once per *system* rather than once per scan. The larger one is
-the spec's own answer — a per-detector angular index bounding the cells per
-candidate rather than the operator's size.
+Banding bought 154 → 62.7 ms on the budgeted stage. Everything tried since has
+been worth about ten percent, and the measurements say why:
+
+- **Band height is not the constraint.** Heights of 4, 8, 16 and 32 rows land
+  within noise of each other on the 2-D scene, so shrinking the gathered arrays
+  below L2 changes nothing: the loop is not capacity-bound.
+- **The per-cell range lookup was worth ~7%.** Packing each cell's entry range
+  into one `u64` removed one of two dependent loads, and storing entries inline
+  at a fixed stride — so a cell carrying one or two rays needs no range lookup
+  at all — added a few percent more. Both are in. Two unit tests assert which
+  layout each scene actually takes, because a layout that is silently never
+  exercised is a bug that ships.
+- **Per-candidate bookkeeping is not the cost.** `z_map`, which does nothing per
+  candidate but compare and store, measures *slower* than `scan`, so there is
+  nothing to win there. Deferring the amplitude division past the top-k gate is
+  kept because it is free, not because it moved the number.
+- **Band construction is ~13% of the stage** (≈8–11 ms), so removing it entirely
+  would not close the gap either.
+
+What remains is the gather itself: at radius 1 a candidate resolves five cells,
+five ray references and five chord lengths. That is the spec's own answer — a
+per-detector angular index that bounds the cells a candidate can see, rather
+than one bounded by the operator's size — plus a transpose built once per
+*system* instead of once per scan.
 
 ### A6: look-elsewhere
 
