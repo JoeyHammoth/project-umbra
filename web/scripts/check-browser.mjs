@@ -342,8 +342,42 @@ async function main() {
       );
     }
 
+    // The scan's field is a second canvas, and it is only a picture if `Z`
+    // reached a pixel. Comparing it with the density canvas proves the two hold
+    // different data: a fallback that painted rho twice would pass a brightness
+    // count and fail this.
+    const scanned = await client.send('Runtime.evaluate', {
+      expression: `(() => {
+        const density = document.querySelector('canvas[data-testid="density"]');
+        const scan = document.querySelector('canvas[data-testid="scan"]');
+        if (!scan) return { found: false };
+        const d = density.getContext('2d').getImageData(0, 0, density.width, density.height).data;
+        const s = scan.getContext('2d').getImageData(0, 0, scan.width, scan.height).data;
+        let identical = d.length === s.length;
+        for (let i = 0; identical && i < s.length; i += 1) {
+          if (d[i] !== s[i]) identical = false;
+        }
+        return { found: true, width: scan.width, height: scan.height, identical };
+      })()`,
+      returnByValue: true,
+    });
+    const scanDrawn = scanned.result?.result?.value;
+    if (!scanDrawn?.found) {
+      throw new Error('the page has no scan canvas\n' + diagnostics(client, logLines));
+    }
+    if (scanDrawn.width !== 32 || scanDrawn.height !== 32) {
+      throw new Error(
+        `the scan canvas is ${scanDrawn.width} x ${scanDrawn.height}, not the 32 x 32 grid`,
+      );
+    }
+    if (scanDrawn.identical) {
+      throw new Error(
+        'the scan canvas is a copy of the density canvas: the Z field never arrived',
+      );
+    }
+
     client.close();
-    return `${text} [indexeddb records: ${records}] [canvas 32x32, ${drawn.lit} lit]`;
+    return `${text} [indexeddb records: ${records}] [canvas 32x32, ${drawn.lit} lit] [scan 32x32, distinct]`;
   } finally {
     chrome.kill();
     // A killed Chrome can leave a renderer holding the inherited stderr pipe,

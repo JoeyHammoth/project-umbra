@@ -30,6 +30,8 @@ type BuildState =
       lambda: ArrayBufferView;
       counts: Uint32Array;
       density: Float32Array;
+      /** The scan's `Z` at every voxel, so the view can draw the statistic. */
+      z: Float32Array;
       steps: number;
       objective: number | null;
       peakZ: number;
@@ -192,6 +194,7 @@ export function App() {
             lambda: expected.lambda,
             counts: counts.counts,
             density: recon.density as Float32Array,
+            z: scan.z as Float32Array,
             steps: recon.iterations,
             objective: recon.objective,
             peakZ: scan.maxZ,
@@ -231,11 +234,17 @@ export function App() {
         <h2 id="reconstruction">Reconstruction</h2>
         <DensityView
           density={shown?.density ?? null}
+          z={shown?.z ?? null}
           width={shown?.grid ?? 1}
           summary={
             shown
               ? `Reconstructed density on a ${shown.grid} × ${shown.cols / shown.grid} voxel grid, A2 after ${shown.steps} steps at ${formatExposure(exposure)}.`
               : 'Waiting for the reconstruction…'
+          }
+          scanSummary={
+            shown
+              ? `A6 score scan of the same data, Z peak ${shown.peakZ.toFixed(2)} at voxel ${shown.peakVoxel}. The panel is fixed at 0–5σ, so brightness is comparable across exposures; the default scene's own data is H0, and this null is the honest result.`
+              : 'Waiting for the scan…'
           }
         />
         <label className="exposure">

@@ -137,6 +137,14 @@ jobs:
     name: LEE calibration campaign
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
+    # The workflow's group is per ref with `cancel-in-progress`, which is right for
+    # the fast gates and wrong here: a campaign of 10⁵ toys runs for hours, and a
+    # push to `main` would cancel it — including the push that merges a fix for
+    # signing something else. Job-level concurrency replaces the workflow's for
+    # this job, so the campaign survives an unrelated merge.
+    concurrency:
+      group: lee-calibration-${{ github.ref }}
+      cancel-in-progress: false
     # 10⁴ toys take ~17 min. M3's rate criterion needs ~10⁵ for an interval
     # narrow enough to decide ±20%, and that is ~3 h, so the job is sized for the
     # campaign the criterion actually asks for rather than the one that fits in a
