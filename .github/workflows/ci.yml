@@ -18,8 +18,13 @@ on:
 permissions:
   contents: read
 
+# Per ref *and* per event. A push must cancel a superseded push, but a dispatch
+# must not be cancelled by one: a calibration campaign runs for hours, and this
+# group cancels the whole run -- jobs with their own concurrency included -- so a
+# merge of something unrelated used to kill it. (Job-level concurrency does not
+# help here; the run itself is what gets cancelled.)
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -137,11 +142,9 @@ jobs:
     name: LEE calibration campaign
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    # The workflow's group is per ref with `cancel-in-progress`, which is right for
-    # the fast gates and wrong here: a campaign of 10⁵ toys runs for hours, and a
-    # push to `main` would cancel it — including the push that merges a fix for
-    # signing something else. Job-level concurrency replaces the workflow's for
-    # this job, so the campaign survives an unrelated merge.
+    # A second line of defence: two campaign dispatches on the same ref should not
+    # cancel each other silently, because the losing run may be the only one that
+    # had reached the interesting tail.
     concurrency:
       group: lee-calibration-${{ github.ref }}
       cancel-in-progress: false
