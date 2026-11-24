@@ -24,6 +24,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 
+import { GlobalPPlot } from './GlobalPPlot';
 import {
   DENSITY_LEGEND,
   SIGMA_LEGEND,
@@ -46,6 +47,12 @@ export interface DensityViewProps {
   summary: string;
   /** The same for the `Z` panel, whose units are sigma rather than g cm⁻³. */
   scanSummary?: string;
+  /** Global `p` at 0, 0.05, …, 6σ; null before the calibration lands. */
+  globalP?: Float32Array | null;
+  /** The scan's peak, marked on that curve. */
+  leePeakZ?: number;
+  /** Toys behind the curve, stated in its caption. */
+  leeToys?: number;
 }
 
 /**
@@ -128,6 +135,9 @@ export function DensityView({
   width,
   summary,
   scanSummary,
+  globalP = null,
+  leePeakZ = 0,
+  leeToys = 0,
 }: DensityViewProps) {
   const densityCanvas = useRef<HTMLCanvasElement | null>(null);
   const scanCanvas = useRef<HTMLCanvasElement | null>(null);
@@ -264,6 +274,10 @@ export function DensityView({
             ) : null}
           </figcaption>
         </figure>
+      ) : null}
+
+      {globalP && globalP.length > 0 ? (
+        <GlobalPPlot curve={globalP} peakZ={leePeakZ} toys={leeToys} />
       ) : null}
     </div>
   );

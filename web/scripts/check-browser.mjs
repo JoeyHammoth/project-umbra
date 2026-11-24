@@ -419,6 +419,36 @@ async function main() {
       );
     }
 
+    // The correction is drawn as well as quoted: the curve has to reach an SVG
+    // path, one point per threshold, or the figure is an empty frame that still
+    // looks finished.
+    const curve = await client.send('Runtime.evaluate', {
+      expression: `(() => {
+        const svg = document.querySelector('[data-testid="global-p"]');
+        if (!svg) return { found: false };
+        const path = svg.querySelector('path.global-p-curve');
+        const d = path?.getAttribute('d') ?? '';
+        return {
+          found: true,
+          points: (d.match(/[ML]/g) ?? []).length,
+          label: svg.getAttribute('aria-label') ?? '',
+        };
+      })()`,
+      returnByValue: true,
+    });
+    const curveDrawn = curve.result?.result?.value;
+    if (!curveDrawn?.found) {
+      throw new Error('the page has no global-p curve\n' + diagnostics(client, logLines));
+    }
+    if (curveDrawn.points !== 121) {
+      throw new Error(
+        `the curve has ${String(curveDrawn.points)} points, not the 121 samples 0-6σ needs`,
+      );
+    }
+    if (!curveDrawn.label.includes('background-only toys')) {
+      throw new Error(`the curve's label does not say what it is from: ${curveDrawn.label}`);
+    }
+
     // The window is a control, not a caption. Moving both sliders to the full
     // positive range must change the pixels: a slider wired only to the legend
     // would leave this canvas identical and read as working.
@@ -456,8 +486,49 @@ async function main() {
       throw new Error('moving the window to 0–100% painted the same pixels');
     }
 
+    // The toy count is a control with a measured cost, not a constant. Changing
+    // it must re-run the calibration and report the new count and its time; a
+    // select wired to nothing would leave the old answer on the page.
+    const retooled = await client.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const select = document.querySelector('[data-testid="toys"]');
+        if (!select) return { found: false };
+        const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+        setter.call(select, '50');
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          const node = document.querySelector('[data-testid="lee"]');
+          if (node?.dataset.toys === '50') {
+            return {
+              found: true,
+              toys: 50,
+              ms: document.querySelector('[data-testid="toys-ms"]')?.textContent ?? '',
+            };
+          }
+        }
+        return { found: true, toys: -1, ms: '' };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    const retuned = retooled.result?.result?.value;
+    if (!retuned?.found) {
+      throw new Error('the page has no toy-count control\n' + diagnostics(client, logLines));
+    }
+    if (retuned.toys !== 50) {
+      throw new Error(
+        `changing the toy count left ${String(retuned.toys)} toys on the page`,
+      );
+    }
+    if (!/^\d+ ms$/.test(retuned.ms)) {
+      throw new Error(
+        `the toy count reports no measured time: ${JSON.stringify(retuned.ms)}`,
+      );
+    }
+
     client.close();
-    return `${text} [indexeddb records: ${records}] [canvas 32x32, ${drawn.lit} lit] [scan 32x32, distinct] [lee ${calibrated.toys} toys, p ${calibrated.globalP}] [window moved, ${windowed.changed} bytes]`;
+    return `${text} [indexeddb records: ${records}] [canvas 32x32, ${drawn.lit} lit] [scan 32x32, distinct] [lee ${calibrated.toys} toys, p ${calibrated.globalP}] [window moved, ${windowed.changed} bytes] [curve ${curveDrawn.points} points] [toys 50, ${retuned.ms}]`;
   } finally {
     chrome.kill();
     // A killed Chrome can leave a renderer holding the inherited stderr pipe,
