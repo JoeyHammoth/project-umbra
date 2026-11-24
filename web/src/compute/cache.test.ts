@@ -64,3 +64,59 @@ test('a missing store degrades to a miss instead of failing the task', async () 
   assert.equal(await cache.get('k'), undefined);
   await cache.set('k', { ok: true, result: null });
 });
+
+test('the budget drops the oldest writes and keeps the newest', async () => {
+  const cache = new IdbCache(name(), undefined, { maxEntries: 2 });
+  await cache.set('a', { ok: true, result: { from: 'a' } });
+  await cache.set('b', { ok: true, result: { from: 'b' } });
+  await cache.set('c', { ok: true, result: { from: 'c' } });
+
+  assert.equal(await cache.get('a'), undefined, 'the oldest entry is the one dropped');
+  assert.deepEqual((await cache.get('b'))?.result, { from: 'b' });
+  assert.deepEqual((await cache.get('c'))?.result, { from: 'c' });
+  await cache.close();
+});
+
+test('the byte budget evicts by size, not only by count', async () => {
+  // Two 1 KiB results against a 1.5 KiB budget: keeping both would cost twice
+  // what the budget allows, so the earlier one goes.
+  const cache = new IdbCache(name(), undefined, { maxEntries: 10, maxBytes: 1500 });
+  await cache.set('first', { ok: true, result: { lambda: new Float32Array(256) } });
+  await cache.set('second', { ok: true, result: { lambda: new Float32Array(256) } });
+
+  assert.equal(await cache.get('first'), undefined);
+  assert.ok(await cache.get('second'), 'the newer result is the one kept');
+  await cache.close();
+});
+
+test('rewriting a key makes it the newest, so it survives the next eviction', async () => {
+  const cache = new IdbCache(name(), undefined, { maxEntries: 2 });
+  await cache.set('a', { ok: true, result: { generation: 1 } });
+  await cache.set('b', { ok: true, result: { generation: 1 } });
+  await cache.set('a', { ok: true, result: { generation: 2 } });
+  await cache.set('c', { ok: true, result: { generation: 1 } });
+
+  assert.deepEqual((await cache.get('a'))?.result, { generation: 2 });
+  assert.equal(await cache.get('b'), undefined, 'the untouched entry is older');
+  await cache.close();
+});
+
+test('a read does not refresh an entry, and the test says so', async () => {
+  // Refreshing on a hit would rewrite the record, copying the whole result; the
+  // policy is oldest-write-first and this pins it rather than leaving it implied.
+  const cache = new IdbCache(name(), undefined, { maxEntries: 2 });
+  await cache.set('a', { ok: true, result: { from: 'a' } });
+  await cache.set('b', { ok: true, result: { from: 'b' } });
+  assert.ok(await cache.get('a'));
+  await cache.set('c', { ok: true, result: { from: 'c' } });
+
+  assert.equal(await cache.get('a'), undefined);
+  await cache.close();
+});
+
+test('a budget too small to hold anything empties the store instead of failing', async () => {
+  const cache = new IdbCache(name(), undefined, { maxEntries: 4, maxBytes: 0 });
+  await cache.set('k', { ok: true, result: { lambda: new Float32Array(4) } });
+  assert.equal(await cache.get('k'), undefined, 'nothing fits in a zero-byte budget');
+  await cache.close();
+});

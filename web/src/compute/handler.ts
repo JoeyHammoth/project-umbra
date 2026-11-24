@@ -28,8 +28,25 @@ export interface ComputeCore {
   ): Float32Array;
   /** The scene's own density field, for a caller with no override. */
   sceneDensity(systemKey: string): Float32Array;
-  /** Poisson counts at an arbitrary exposure. */
-  simulate(expectedKey: string, seed: bigint, exposureSeconds: number): Uint32Array;
+  /** Poisson counts at an arbitrary exposure, remembered under `countsKey`. */
+  simulate(
+    countsKey: string,
+    expectedKey: string,
+    seed: bigint,
+    exposureSeconds: number,
+  ): Uint32Array;
+  /**
+   * Runs a solver over stored counts. Parameter names and values travel as two
+   * arrays because the WASM boundary takes no records; the handler zips them
+   * from the protocol's plain object.
+   */
+  recon(
+    countsKey: string,
+    solver: string,
+    paramNames: string[],
+    paramValues: number[],
+    iterations: number,
+  ): { density: Float32Array; iterations: number; objective?: number };
 }
 
 /**
@@ -123,7 +140,10 @@ export function handleTask(core: ComputeCore, request: TaskRequest): TaskEvent {
       }
       case 'SIMULATE': {
         const payload = request.payload as PayloadOf<'SIMULATE'>;
+        // `request.key` is the counts key: the observation is what `RECON` will
+        // name, and its content key is already the identity of these counts.
         const counts = core.simulate(
+          request.key,
           payload.expectedKey,
           BigInt(payload.seed),
           payload.exposureSeconds,
@@ -133,6 +153,34 @@ export function handleTask(core: ComputeCore, request: TaskRequest): TaskEvent {
           type: 'result',
           result: { counts },
           transfer: [transferable(counts)],
+        };
+      }
+      case 'RECON': {
+        const payload = request.payload as PayloadOf<'RECON'>;
+        // Object key order is insertion order, and both arrays are built from
+        // the same iteration, so names and values stay paired across the call.
+        const params = payload.params ?? {};
+        const names = Object.keys(params);
+        const outcome = core.recon(
+          payload.countsKey,
+          payload.solver,
+          names,
+          names.map((name) => params[name]!),
+          payload.iterations,
+        );
+        // The density is read once: a wasm getter converts the vector on every
+        // call, so a second read would allocate a second array and the transfer
+        // list would name the wrong buffer.
+        const density = outcome.density;
+        return {
+          id,
+          type: 'result',
+          result: {
+            density,
+            iterations: outcome.iterations,
+            objective: outcome.objective ?? null,
+          },
+          transfer: [transferable(density)],
         };
       }
       default:

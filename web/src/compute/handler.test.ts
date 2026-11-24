@@ -30,6 +30,7 @@ class FakeCore implements ComputeCore {
   lambda = new Float32Array([1.5, 2.5, 3.5]);
   counts = new Uint32Array([7, 8, 9]);
   density = new Float32Array([2.65, 2.65]);
+  reconObjective: number | undefined = -123.5;
   failure: unknown = null;
 
   buildSystem(systemKey: string, sceneJson: string) {
@@ -55,10 +56,23 @@ class FakeCore implements ComputeCore {
     return this.lambda;
   }
 
-  simulate(expectedKey: string, seed: bigint, exposureSeconds: number) {
+  simulate(countsKey: string, expectedKey: string, seed: bigint, exposureSeconds: number) {
     this.throwIfFailing();
-    this.calls.push(`simulate ${expectedKey} ${seed} ${exposureSeconds}`);
+    this.calls.push(`simulate ${countsKey} ${expectedKey} ${seed} ${exposureSeconds}`);
     return this.counts;
+  }
+
+  recon(
+    countsKey: string,
+    solver: string,
+    paramNames: string[],
+    paramValues: number[],
+    iterations: number,
+  ) {
+    this.throwIfFailing();
+    const params = paramNames.map((name, index) => `${name}=${paramValues[index]}`).join(',');
+    this.calls.push(`recon ${countsKey} ${solver} ${params} ${iterations}`);
+    return { density: this.density, iterations, objective: this.reconObjective };
   }
 
   private throwIfFailing() {
@@ -140,7 +154,11 @@ test('simulate transfers its counts and passes the seed as a BigInt', () => {
   const { result, transfer } = asResult<{ counts: Uint32Array }>(event);
   assert.equal(result.counts, core.counts);
   assert.equal(transfer?.[0], result.counts.buffer);
-  assert.deepEqual(core.calls, ['simulate exp 18446744073709551615 60']);
+  assert.deepEqual(
+    core.calls,
+    ['simulate content-key exp 18446744073709551615 60'],
+    'the counts carry their own key so RECON can name them',
+  );
 });
 
 test('a task that lost its content key is a coded error, not a TypeError', () => {
@@ -153,21 +171,56 @@ test('a task that lost its content key is a coded error, not a TypeError', () =>
   assert.deepEqual(core.calls, [], 'nothing reaches the core unnamed');
 });
 
-test('a task with no entry point is an error event, not a thrown exception', () => {
+test('recon transfers the density it reconstructed and reports its objective', () => {
   const core = new FakeCore();
   const event = handleTask(
     core,
     request('RECON', {
-      countsKey: 'counts',
+      countsKey: 'counts-key',
+      solver: 'a2-poisson-map',
+      params: { beta: 1e3, memory: 8 },
+      iterations: 12,
+    }),
+  );
+
+  const { result, transfer } = asResult<{
+    density: Float32Array;
+    iterations: number;
+    objective: number | null;
+  }>(event);
+  assert.equal(result.density, core.density, 'the array is handed over, not rebuilt');
+  assert.equal(transfer?.[0], result.density.buffer, 'the transfer list names that buffer');
+  assert.equal(result.iterations, 12);
+  assert.equal(result.objective, -123.5);
+  assert.deepEqual(core.calls, ['recon counts-key a2-poisson-map beta=1000,memory=8 12']);
+});
+
+test('a solver with no objective reports null rather than a missing field', () => {
+  const core = new FakeCore();
+  core.reconObjective = undefined;
+  const event = handleTask(
+    core,
+    request('RECON', {
+      countsKey: 'counts-key',
       solver: 'a1-transmission-em',
       params: {},
-      iterations: 1,
+      iterations: 3,
     }),
+  );
+  const { result } = asResult<{ objective: number | null }>(event);
+  assert.equal(result.objective, null);
+});
+
+test('a stage still without an entry point is an error event, not a thrown exception', () => {
+  const core = new FakeCore();
+  const event = handleTask(
+    core,
+    request('SCAN', { countsKey: 'counts', scalesVoxels: [1, 2], profileNuisances: false }),
   );
 
   const { code, message } = asError(event);
   assert.equal(code, 'unimplemented');
-  assert.match(message, /RECON/);
+  assert.match(message, /SCAN/);
   assert.deepEqual(core.calls, [], 'the core is never called');
 });
 

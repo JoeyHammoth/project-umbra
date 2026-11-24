@@ -29,6 +29,31 @@ const port = Number(process.env.CDP_PORT ?? 9222);
 const profile = mkdtempSync(path.join(tmpdir(), 'umbra-chrome-'));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * The numbers this build must produce, pinned rather than matched by shape.
+ *
+ * A shape-only check passes on a density that lost its transfer, a simulation at
+ * the wrong exposure or a reconstruction of the wrong voxel count, because every
+ * one of those still prints a plausible looking line. When the physics or the
+ * default scene changes on purpose, these move in the same commit — which is
+ * where the change has to be stated anyway.
+ */
+const EXPECTED = {
+  rays: 32,
+  voxels: 1024,
+  nnz: 1280,
+  lambda: 32,
+  counts: 32,
+  events: 50074,
+  density: 1024,
+  steps: 20,
+  records: 4,
+};
+
+/** The status line, with every number captured so it can be compared. */
+const STATUS =
+  /^Assembled (\d+) rays × (\d+) voxels, (\d+) non-zero path lengths · λ Float32Array\((\d+)\) · counts Uint32Array\((\d+)\), (\d+) events · ρ Float32Array\((\d+)\) after (\d+) steps, objective (-?[\d.]+(?:e[+-]?\d+)?) · cached in indexeddb$/;
+
 /** `CHROME_PATH`, or the first Chrome-like binary on this machine's PATH. */
 function resolveChrome() {
   const candidates = [
@@ -209,14 +234,34 @@ async function main() {
       );
     }
     // The whole boundary, not just the first stage: `Float32Array` and
-    // `Uint32Array` in the status line are λ and the counts as the main thread
-    // received them, after the worker transferred their buffers.
-    if (
-      !/^Assembled \d+ rays × \d+ voxels, \d+ non-zero path lengths · λ Float32Array\(\d+\) · counts Uint32Array\(\d+\), \d+ events/.test(
-        text,
-      )
-    ) {
+    // `Uint32Array` in the status line are λ, the counts and the density as the
+    // main thread received them, after the worker transferred their buffers.
+    const match = STATUS.exec(text);
+    if (!match) {
       throw new Error(`the build reported a failure: ${text}\n` + diagnostics(client, logLines));
+    }
+    const observed = {
+      rays: Number(match[1]),
+      voxels: Number(match[2]),
+      nnz: Number(match[3]),
+      lambda: Number(match[4]),
+      counts: Number(match[5]),
+      events: Number(match[6]),
+      density: Number(match[7]),
+      steps: Number(match[8]),
+    };
+    const misplaced = Object.entries(EXPECTED)
+      .filter(([field]) => field in observed)
+      .filter(([field, want]) => observed[field] !== want)
+      .map(([field, want]) => `${field}: expected ${want}, got ${observed[field]}`);
+    if (!Number.isFinite(Number(match[9]))) {
+      misplaced.push(`objective: not a finite number (${match[9]})`);
+    }
+    if (misplaced.length > 0) {
+      throw new Error(
+        `the build returned different numbers than this check pins:\n  ${misplaced.join('\n  ')}\n` +
+          `  status: ${text}`,
+      );
     }
     // The store is only real if the browser's own IndexedDB holds the result:
     // the unit tests run against a fake, this runs against the engine.
@@ -237,9 +282,10 @@ async function main() {
       returnByValue: true,
     });
     const records = stored.result?.result?.value;
-    if (typeof records !== 'number' || records < 1) {
+    if (records !== EXPECTED.records) {
       throw new Error(
-        `the browser's IndexedDB holds no cached result (${JSON.stringify(stored.result)}\n` +
+        `the browser's IndexedDB holds ${String(records)} results, not ` +
+          `${EXPECTED.records} (one per completed stage)\n` +
           diagnostics(client, logLines),
       );
     }

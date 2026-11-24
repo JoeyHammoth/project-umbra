@@ -74,7 +74,7 @@ export interface Results {
   BUILD_SYSTEM: { systemKey: string; rows: number; cols: number; nnz: number };
   EXPECTED: { lambda: ArrayBufferView };
   SIMULATE: { counts: Uint32Array };
-  RECON: { density: ArrayBufferView; iterations: number; objective: number };
+  RECON: { density: ArrayBufferView; iterations: number; objective: number | null };
   SCAN: { z: ArrayBufferView; alphaHat: ArrayBufferView; maxZ: number; voxel: number };
   LEE_CALIB: { globalPValues: ArrayBufferView };
   MCMC: { samples: ArrayBufferView; logEvidence: number | null };

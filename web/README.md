@@ -33,7 +33,7 @@ change, and bump `API_VERSION` when the contract breaks.
 | `workers.ts` | The browser `WorkerHost`: real module workers |
 | `worker.ts` | Inside the worker: loads WASM, checks the handshake, calls `handleTask` |
 | `handler.ts` | One task in, one event out — and the transfer list that moves the buffers |
-| `cache.ts` | `CacheStore` over IndexedDB, so results survive a reload |
+| `cache.ts` | `CacheStore` over IndexedDB, so results survive a reload; bounded by entry and byte budgets, oldest write evicted first |
 | `compute.ts` | What the app calls: bus + workers + persistent cache |
 
 `bus.ts`, `handler.ts` and `cache.ts` are tested under `node --test`
