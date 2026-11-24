@@ -191,6 +191,13 @@ pub struct LeeOutcome {
     /// Toys whose maximum exceeded the anchor `u0` — the support behind
     /// `z_at_3_sigma`.
     pub toys_above_u0: u32,
+    /// Mean Euler characteristic of the toys' excursion set at `u0`.
+    ///
+    /// This is the normalisation the Gross–Vitells extrapolation scales by, and
+    /// the page draws that extrapolation: it crosses the boundary rather than
+    /// being re-derived in JavaScript, where it could quietly disagree with the
+    /// threshold computed here from the same number.
+    pub mean_euler_at_u0: f32,
     /// Global `p` at 0, 0.05, …, 6 sigma.
     pub curve: Vec<f32>,
 }
@@ -797,6 +804,7 @@ impl Core {
             max_toy_z: calibration.maxima.last().copied().unwrap_or(0.0),
             z_at_3_sigma,
             toys_above_u0: calibration.toys_above_u0,
+            mean_euler_at_u0: calibration.mean_euler_at_u0,
             curve,
         })
     }
@@ -1259,6 +1267,7 @@ pub struct LeeResult {
     max_toy_z: f32,
     z_at_3_sigma: Option<f32>,
     toys_above_u0: u32,
+    mean_euler_at_u0: f32,
 }
 
 impl From<LeeOutcome> for LeeResult {
@@ -1272,6 +1281,7 @@ impl From<LeeOutcome> for LeeResult {
             max_toy_z: outcome.max_toy_z,
             z_at_3_sigma: outcome.z_at_3_sigma,
             toys_above_u0: outcome.toys_above_u0,
+            mean_euler_at_u0: outcome.mean_euler_at_u0,
         }
     }
 }
@@ -1306,6 +1316,12 @@ impl LeeResult {
     #[wasm_bindgen(getter)]
     pub fn toys(&self) -> u32 {
         self.toys
+    }
+
+    /// Mean Euler characteristic at the anchor, for the drawn extrapolation.
+    #[wasm_bindgen(getter, js_name = meanEulerAtU0)]
+    pub fn mean_euler_at_u0(&self) -> f32 {
+        self.mean_euler_at_u0
     }
 
     /// The largest maximum in the null.

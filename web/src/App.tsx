@@ -5,6 +5,7 @@ import { TaskFailure, contentKey } from './compute/bus';
 import { createBrowserCompute } from './compute/compute';
 import type { BrowserCompute, CacheKind } from './compute/compute';
 import { PIPELINE_STAGES } from './compute/protocol';
+import { emptyTail, wilsonInterval } from './resolution';
 import sceneJson from './scenes/default.json?raw';
 
 /** The exposure the page opens on, in seconds. */
@@ -67,6 +68,8 @@ type BuildState =
         maxToyZ: number;
         zAt3Sigma: number | null;
         toysAboveU0: number;
+        /** Mean Euler characteristic at the anchor, for the drawn model. */
+        meanEulerAtU0: number;
         /** Global `p` at 0, 0.05, …, 6σ, for the drawn curve. */
         curve: Float32Array;
         /** Round trip of the calibration, measured here because wasm has no clock. */
@@ -263,6 +266,7 @@ export function App() {
               maxToyZ: lee.maxToyZ as number,
               zAt3Sigma: lee.zAt3Sigma as number | null,
               toysAboveU0: lee.toysAboveU0 as number,
+              meanEulerAtU0: lee.meanEulerAtU0 as number,
               curve: lee.globalPValues as Float32Array,
               ms: leeMs,
             },
@@ -285,6 +289,11 @@ export function App() {
   }, [exposure, leeToys]);
 
   const shown = state.status === 'ok' ? state : null;
+  // The rate the page quotes is a measurement, so it carries the interval that
+  // measurement has: 161 of 200 is 0.805, but only to about ±0.055.
+  const interval = shown
+    ? wilsonInterval(shown.lee.toysAtOrAbovePeak, shown.lee.toys)
+    : null;
 
   return (
     <main className="shell">
@@ -317,6 +326,8 @@ export function App() {
           globalP={shown?.lee.curve ?? null}
           leePeakZ={shown?.lee.peakZ ?? 0}
           leeToys={shown?.lee.toys ?? 0}
+          leeMeanEuler={shown?.lee.meanEulerAtU0 ?? 0}
+          leeU0={LEE_U0}
         />
         {shown ? (
           <p
@@ -330,11 +341,14 @@ export function App() {
             Look-elsewhere: the scan's local peak of {shown.lee.peakZ.toFixed(2)}σ was
             matched or beaten by {shown.lee.toysAtOrAbovePeak} of {shown.lee.toys}{' '}
             background-only toys, so its global <em>p</em> is{' '}
-            {shown.lee.globalPAtPeak.toFixed(3)} — a local significance says nothing
-            about a search of {shown.cols} positions.{' '}
+            {shown.lee.globalPAtPeak.toFixed(3)}
+            {interval ? ` ± ${interval.half.toFixed(3)} at 95%` : ''}, and{' '}
+            {shown.lee.toys} toys cannot express anything below{' '}
+            {emptyTail(shown.lee.toys).toFixed(4)} — a local significance says
+            nothing about a search of {shown.cols} positions.{' '}
             {shown.lee.zAt3Sigma === null
               ? `No toy reached the ${LEE_U0}σ Euler anchor, so no extrapolated 3σ threshold is quoted.`
-              : `Extrapolated from the ${shown.lee.toysAboveU0} toys above ${LEE_U0}σ, a global 3σ would need ${shown.lee.zAt3Sigma.toFixed(2)}σ.`}{' '}
+              : `Extrapolated from the ${shown.lee.toysAboveU0} toys above ${LEE_U0}σ (mean χ = ${shown.lee.meanEulerAtU0.toFixed(2)}), a global 3σ would need ${shown.lee.zAt3Sigma.toFixed(2)}σ.`}{' '}
             The {shown.lee.toys} toys took {Math.round(shown.lee.ms)} ms here, round trip.
           </p>
         ) : null}

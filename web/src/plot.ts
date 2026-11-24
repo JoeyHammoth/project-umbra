@@ -45,6 +45,72 @@ export function curvePoints(values: ArrayLike<number>): CurvePoint[] {
   }));
 }
 
+/**
+ * Spacing of the model curve: the same 0.05σ grid the empirical curve arrives on,
+ * so the two can be read against the same marks.
+ */
+export const MODEL_STEP = 0.05;
+
+/** One-sided normal tail, the local `p` the Gross–Vitells model starts from. */
+export function normalTail(z: number): number {
+  if (!Number.isFinite(z)) return z > 0 ? 0 : 1;
+  // The series below is good to about 1e-7 but not exact at the origin, and the
+  // tail of zero is the one value worth having exactly.
+  if (z === 0) return 0.5;
+  return 0.5 * erfc(z / Math.SQRT2);
+}
+
+/** `erfc` by Abramowitz–Stegun 7.1.26: five terms, about 1e-7, which is finer
+ * than the f32 the curve arrives in. */
+function erfc(x: number): number {
+  const ax = Math.abs(x);
+  const t = 1 / (1 + 0.3275911 * ax);
+  const poly = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+  const erf = 1 - poly * Math.exp(-ax * ax);
+  return x >= 0 ? 1 - erf : 1 + erf;
+}
+
+/**
+ * Global `p` from the Euler anchor: the Gross–Vitells scaling the Rust core
+ * uses (`umbra_stats::lee::extrapolated_global_p`), for a `dim`-dimensional
+ * search. At or below the anchor nothing is extrapolated and the local `p` is
+ * returned, which is the one place the two differ.
+ */
+export function modelGlobalP(z: number, u0: number, meanEuler: number, dim = 2): number {
+  const local = normalTail(z);
+  if (!(u0 > 0) || !(meanEuler > 0) || !Number.isFinite(z) || z <= u0) {
+    return Math.min(1, local);
+  }
+  const extra =
+    meanEuler *
+    Math.pow(z / u0, Math.max(0, dim - 1)) *
+    Math.exp(-(z * z - u0 * u0) / 2);
+  return Math.min(1, Math.max(local, local + extra));
+}
+
+/**
+ * The extrapolation as points, from the anchor to the axis ceiling.
+ *
+ * Empty when there is no anchor to stand on: zero measured Euler characteristic
+ * means the toys never formed an excursion there, and drawing a model from that
+ * would be drawing the local `p` under a global label.
+ */
+export function extrapolatedPoints(u0: number, meanEuler: number, dim = 2): CurvePoint[] {
+  if (!(u0 > 0) || !(u0 < Z_AXIS) || !(meanEuler > 0)) return [];
+  const points: CurvePoint[] = [];
+  // One step above the anchor, not on it: at `u0` the model returns the local
+  // `p`, and just above it the excursion term arrives at full size, so including
+  // the anchor would draw a vertical jump that no data has. The empirical curve
+  // is the one measured at the anchor.
+  for (let z = u0 + MODEL_STEP; z <= Z_AXIS + 1e-9; z += MODEL_STEP) {
+    points.push({
+      x: zFraction(z),
+      y: logFraction(modelGlobalP(z, u0, meanEuler, dim)),
+    });
+  }
+  return points;
+}
+
 /** Where a `Z` sits on that axis, clamped to it. */
 export function zFraction(z: number, stop = Z_AXIS): number {
   if (!Number.isFinite(z) || !(stop > 0)) return 0;

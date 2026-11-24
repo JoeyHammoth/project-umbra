@@ -53,6 +53,10 @@ export interface DensityViewProps {
   leePeakZ?: number;
   /** Toys behind the curve, stated in its caption. */
   leeToys?: number;
+  /** Mean Euler characteristic at the anchor; 0 when no toy crossed it. */
+  leeMeanEuler?: number;
+  /** The Euler anchor, in sigma. */
+  leeU0?: number;
 }
 
 /**
@@ -138,6 +142,8 @@ export function DensityView({
   globalP = null,
   leePeakZ = 0,
   leeToys = 0,
+  leeMeanEuler = 0,
+  leeU0 = 0,
 }: DensityViewProps) {
   const densityCanvas = useRef<HTMLCanvasElement | null>(null);
   const scanCanvas = useRef<HTMLCanvasElement | null>(null);
@@ -277,7 +283,13 @@ export function DensityView({
       ) : null}
 
       {globalP && globalP.length > 0 ? (
-        <GlobalPPlot curve={globalP} peakZ={leePeakZ} toys={leeToys} />
+        <GlobalPPlot
+          curve={globalP}
+          peakZ={leePeakZ}
+          toys={leeToys}
+          meanEuler={leeMeanEuler}
+          u0={leeU0}
+        />
       ) : null}
     </div>
   );
