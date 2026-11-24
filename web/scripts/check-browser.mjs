@@ -56,7 +56,9 @@ const EXPECTED = {
   peakAlpha: 1.0,
   records: 5,
   // Every voxel of a 32 x 32 grid carries a value, so every pixel is painted.
-  // Fewer means part of the field never reached the canvas.
+  // Fewer means part of the field never reached the canvas. "Lit" is a non-zero
+  // red channel, which the heatmap's own first stop guarantees for any density
+  // above zero (it starts at 16, not 0) while zero stays black.
   litVoxels: 1024,
 };
 

@@ -7,10 +7,12 @@
  * a regression that swaps the row order or loses the field looks wrong instead
  * of merely looking different.
  *
- * The ramp is deliberately one hue: a multi-colour map invites reading hue as
- * intensity, and here brightness is the only quantity a pixel carries. Air is
- * black because the field really is zero there, so a blank square with no
- * structure is a visible failure rather than a plausible dark image.
+ * Air is black because the field really is zero there, so a blank square with no
+ * structure is a visible failure rather than a plausible dark image. Everything
+ * above zero goes through the heatmap below: monotone in luminance, so brightness
+ * still tracks density, but spread across hue, because a 20-step reconstruction
+ * spans more than a decade and a single hue rounds every value below a tenth of
+ * the peak to the same near-black.
  */
 
 import { useEffect, useRef } from 'react';
@@ -33,6 +35,42 @@ export function peakOf(density: Float32Array): number {
   return peak;
 }
 
+type Stop = readonly [t: number, r: number, g: number, b: number];
+
+/**
+ * A five-stop heatmap: indigo → purple → crimson → orange → pale yellow.
+ *
+ * The first stop is deliberately not black. Air is painted black below, and a
+ * ramp starting at zero would make the faintest real density indistinguishable
+ * from empty space — which is also what lets the browser check count `r > 0` as
+ * "this voxel carried a value".
+ */
+const RAMP: readonly Stop[] = [
+  [0, 16, 8, 40],
+  [0.25, 87, 16, 110],
+  [0.5, 188, 55, 84],
+  [0.75, 249, 142, 8],
+  [1, 252, 255, 164],
+];
+
+/** Colour at fraction `t` of the peak, linearly interpolated between stops. */
+export function rampAt(t: number): [number, number, number] {
+  const x = t < 0 ? 0 : t > 1 ? 1 : t;
+  for (let stop = 1; stop < RAMP.length; stop += 1) {
+    const [t1, r1, g1, b1] = RAMP[stop]!;
+    if (x > t1) continue;
+    const [t0, r0, g0, b0] = RAMP[stop - 1]!;
+    const f = t1 === t0 ? 0 : (x - t0) / (t1 - t0);
+    return [
+      Math.round(r0 + (r1 - r0) * f),
+      Math.round(g0 + (g1 - g0) * f),
+      Math.round(b0 + (b1 - b0) * f),
+    ];
+  }
+  const [, r, g, b] = RAMP[RAMP.length - 1]!;
+  return [r, g, b];
+}
+
 /**
  * Fills an `ImageData` with the field, normalised to its own peak.
  *
@@ -48,15 +86,17 @@ export function paint(
   const height = Math.max(1, Math.ceil(density.length / width));
   const data = new Uint8ClampedArray(width * height * 4);
   const peak = peakOf(density);
-  const scale = peak > 0 ? 255 / peak : 0;
+  const scale = peak > 0 ? 1 / peak : 0;
   for (let index = 0; index < density.length; index += 1) {
-    const value = Math.round((density[index] ?? 0) * scale);
-    data[index * 4] = value;
-    // Two thirds and just under half: rock reads as warm, and the ratio keeps
-    // very dark values from clipping to pure red.
-    data[index * 4 + 1] = Math.round(value * 0.66);
-    data[index * 4 + 2] = Math.round(value * 0.42);
+    const value = density[index] ?? 0;
+    // Opaque everywhere, black where the field is zero: a hole in the rock is
+    // black structure, not a window onto the page behind the canvas.
     data[index * 4 + 3] = 255;
+    if (!(value > 0) || scale === 0) continue;
+    const [r, g, b] = rampAt(value * scale);
+    data[index * 4] = r;
+    data[index * 4 + 1] = g;
+    data[index * 4 + 2] = b;
   }
   return { data, height };
 }
