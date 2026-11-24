@@ -22,8 +22,8 @@ pub use profile::{
     SystematicsReport,
 };
 pub use scan::{
-    chi2_mixture_p, refine_lrt, scan, statistics, z_and_alpha_map, z_map, ScanCandidate,
-    ScanConfig, ScanProblem, ScanResult, ScanTiming, TemplateBank,
+    chi2_mixture_p, refine_lrt, scan, scan_with_map, statistics, z_and_alpha_map, z_map,
+    ScanCandidate, ScanConfig, ScanProblem, ScanResult, ScanTiming, TemplateBank,
 };
 
 /// Median expected significance of `H1` against `H0`, as a `Z` value.

@@ -26,7 +26,7 @@ use umbra_physics::{generate_default, Fidelity, FluxTable};
 use umbra_recon::{
     A1Config, A2Config, Control, PoissonMap, Problem, Solver, Start, TransmissionEm,
 };
-use umbra_stats::{scan as score_scan, z_and_alpha_map, ScanConfig, ScanProblem};
+use umbra_stats::{scan_with_map, ScanConfig, ScanProblem};
 use wasm_bindgen::prelude::*;
 
 /// Version of the compute-core API contract.
@@ -602,11 +602,10 @@ impl Core {
             profile_nuisances,
             ..ScanConfig::default()
         };
-        let found = score_scan(&problem, &config);
-        // Candidates for the peak and its amplitude, the field for the picture.
-        // Two sweeps of the same walk, which is what makes them agree; at the
-        // default grid each is a few milliseconds.
-        let (z, alpha_hat) = z_and_alpha_map(&problem, &config);
+        // The peak and the field in one walk: both come from the same candidate
+        // set, and walking it twice doubled the stage's cost for no second
+        // answer.
+        let (found, z, alpha_hat) = scan_with_map(&problem, &config);
         let peak = found.peak;
         Ok(ScanOutcome {
             max_z: peak.map_or(0.0, |candidate| candidate.z),

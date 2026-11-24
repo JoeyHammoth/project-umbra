@@ -54,6 +54,13 @@ jobs:
       - name: Solver benchmark
         run: cargo bench -p umbra-recon --bench portfolio
 
+      # Spec §5.11 budgets the scan's correlation at 50 ms in 2-D and 2 s in 3-D at
+      # 10⁶ candidates. Until this step existed that row was a claim nothing
+      # measured; now the number lands in the log on every push, next to the
+      # portfolio's.
+      - name: Scan benchmark
+        run: cargo bench -p umbra-stats --bench scan
+
       - name: Build wasm core
         run: cargo build -p umbra-wasm --target wasm32-unknown-unknown --release
 

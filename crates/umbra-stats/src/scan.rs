@@ -243,11 +243,84 @@ pub fn scan(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> ScanResult {
     let timing = sweep(problem, cfg, |voxel, scale, u, i| {
         record(&mut best, &mut peak, cfg, voxel, scale, u, i);
     });
+    let (candidates, systematics) = finish(problem, cfg, best);
+    ScanResult {
+        candidates,
+        peak: with_p(peak),
+        timing,
+        systematics,
+    }
+}
+
+/// The scan and the field it draws, from **one** walk of the candidate set.
+///
+/// [`scan`] and [`z_and_alpha_map`] are two consumers of the same candidates, and
+/// calling both walks every voxel twice — which is what the browser's `SCAN` did
+/// until this existed. The peak and the picture come from the same `visit`
+/// closure here, so they cannot disagree about what a candidate scored, and the
+/// stage costs one pass instead of two.
+///
+/// # Panics
+///
+/// Panics if the problem's arrays disagree with the system's dimensions.
+pub fn scan_with_map(
+    problem: &ScanProblem<'_>,
+    cfg: &ScanConfig,
+) -> (ScanResult, Vec<f32>, Vec<f32>) {
+    let voxels = problem.system.voxel_count();
+    let mut map = vec![0.0f32; voxels];
+    let mut alpha = vec![0.0f32; voxels];
+    let (lo, hi) = (
+        f64::from(cfg.alpha_bounds[0]),
+        f64::from(cfg.alpha_bounds[1]).max(f64::from(cfg.alpha_bounds[0])),
+    );
+    let mut best: Vec<ScanCandidate> = Vec::with_capacity(cfg.top_k.max(1));
+    let mut peak: Option<ScanCandidate> = None;
+    let timing = sweep(problem, cfg, |voxel, scale, u, i| {
+        record(&mut best, &mut peak, cfg, voxel, scale, u, i);
+        let z = u as f32 / i.sqrt();
+        if z.is_finite() && z > map[voxel] {
+            map[voxel] = z;
+            alpha[voxel] = (u / f64::from(i)).clamp(lo, hi) as f32;
+        }
+    });
+    let (candidates, systematics) = finish(problem, cfg, best);
+    (
+        ScanResult {
+            candidates,
+            peak: with_p(peak),
+            timing,
+            systematics,
+        },
+        map,
+        alpha,
+    )
+}
+
+/// The peak with its local `p`-value filled in.
+fn with_p(peak: Option<ScanCandidate>) -> Option<ScanCandidate> {
+    peak.map(|mut peak| {
+        peak.local_p = normal_p(f64::from(peak.z));
+        peak
+    })
+}
+
+/// Post-processing shared by [`scan`] and [`scan_with_map`].
+///
+/// The tail on every kept candidate, then the prompt for nuisances. It is one
+/// function rather than two copies because a profiled scan and an unprofiled one
+/// must agree about what the unprofiled statistic was before the systematics
+/// were applied — the report is that comparison.
+fn finish(
+    problem: &ScanProblem<'_>,
+    cfg: &ScanConfig,
+    mut best: Vec<ScanCandidate>,
+) -> (
+    Vec<ScanCandidate>,
+    Option<crate::profile::SystematicsReport>,
+) {
     for candidate in &mut best {
         candidate.local_p = normal_p(f64::from(candidate.z));
-    }
-    if let Some(peak) = &mut peak {
-        peak.local_p = normal_p(f64::from(peak.z));
     }
 
     // Systematics are profiled on the kept candidates, not on all million: a
@@ -279,13 +352,7 @@ pub fn scan(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> ScanResult {
         best.sort_by(|a, b| b.z.total_cmp(&a.z));
         report
     });
-
-    ScanResult {
-        candidates: best,
-        peak,
-        timing,
-        systematics,
-    }
+    (best, systematics)
 }
 
 /// `Z` at every voxel: the best template scale at each position.
