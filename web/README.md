@@ -45,5 +45,11 @@ Chrome's own IndexedDB has the record. It takes `CHROME_PATH` (default: scan the
 PATH for `google-chrome`/`chromium`) and an optional URL to skip starting a
 server. CI runs it in the web job, so a broken boundary fails the build.
 
+`src/DensityView.tsx` is the other end of that boundary: it paints the
+reconstruction one pixel per voxel, and `check-browser` reads the canvas back
+with `getImageData` and pins how many voxels were painted. A field that arrives
+in the main thread correctly and never reaches a pixel is exactly the failure a
+status line cannot see.
+
 The heavy layers (Three.js, uPlot, ONNX) are not installed yet; they arrive as
 lazy chunks so the landing route stays inside its 250 KB gzip budget.
