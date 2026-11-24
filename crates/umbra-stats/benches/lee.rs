@@ -24,9 +24,7 @@ use std::time::Instant;
 
 use umbra_core::{Csr, Grid2, GridAny};
 use umbra_forward::{RayCell, System};
-use umbra_stats::{
-    chi2_mixture_p, lee_toy, LeeCalibration, LeeConfig, ScanConfig, ScanProblem, ToyResult,
-};
+use umbra_stats::{chi2_mixture_p, lee_calibrate_with, LeeConfig, ScanConfig, ScanProblem};
 
 /// The spec's nominal 3σ false-positive rate (§7): a correct global `p` curve
 /// should reach this only at the threshold that the correction assigns to `3σ`.
@@ -103,33 +101,13 @@ fn main() {
     };
     let lee = LeeConfig { u0, dim: 2 };
 
-    let cfg_ref = &cfg;
     let started = Instant::now();
-    let mut results = vec![
-        ToyResult {
-            max_z: 0.0,
-            euler_at_u0: 0,
-        };
-        toys as usize
-    ];
-    let threads = threads.max(1).min(results.len().max(1));
-    let chunk = results.len().div_ceil(threads);
-    std::thread::scope(|scope| {
-        for (block, slot) in results.chunks_mut(chunk).enumerate() {
-            scope.spawn(move || {
-                for (offset, out) in slot.iter_mut().enumerate() {
-                    *out = lee_toy(
-                        &problem,
-                        cfg_ref,
-                        &lee,
-                        seed,
-                        (block * chunk + offset) as u32,
-                    );
-                }
-            });
-        }
-    });
-    let calibration = LeeCalibration::from_toys(&lee, seed, toys, system.voxel_count(), &results);
+    // The scheduling lives in the library now: this bench used to hand-roll the
+    // same chunking, which meant the campaign's only tested path was the one no
+    // other caller could run. Toy `t` depends on `(seed, t)` alone, so the split
+    // is bit-identical to a serial campaign, and `sharding_a_campaign_changes_no_toy`
+    // is what holds that to account instead of the module doc's say-so.
+    let calibration = lee_calibrate_with(&problem, &cfg, &lee, toys, seed, threads);
     let elapsed = started.elapsed();
 
     // The honest 3σ threshold: the smallest z whose empirical global rate is at

@@ -177,10 +177,117 @@ pub fn lee_calibrate(
     n_toys: u32,
     seed: u64,
 ) -> LeeCalibration {
-    let toys: Vec<ToyResult> = (0..n_toys)
+    lee_calibrate_with(problem, cfg, lee, n_toys, seed, default_workers())
+}
+
+/// The most threads a campaign will use.
+///
+/// Each toy holds a `Z` field over the grid, so a worker is about 4 MB at 10⁶
+/// voxels. Sixteen keeps a full campaign under 100 MB while still filling a
+/// runner; raising it trades memory for a shorter wall clock.
+pub const MAX_LEE_WORKERS: usize = 16;
+
+/// How many threads a campaign uses when the caller does not say.
+///
+/// Clamped to [`MAX_LEE_WORKERS`] because the campaign is memory-bound once the
+/// cores are busy, not least because every worker keeps its own field.
+#[cfg(not(target_arch = "wasm32"))]
+fn default_workers() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, |threads| threads.get())
+        .clamp(1, MAX_LEE_WORKERS)
+}
+
+/// The browser has no threads to split a campaign across.
+#[cfg(target_arch = "wasm32")]
+fn default_workers() -> usize {
+    1
+}
+
+/// Toys `start..end`, the unit a worker takes.
+///
+/// Nothing here depends on draw order — toy `t` comes from `(seed, t)` alone —
+/// so a shard can be merged in whatever order it finishes.
+pub fn lee_toys(
+    problem: &ScanProblem<'_>,
+    cfg: &ScanConfig,
+    lee: &LeeConfig,
+    seed: u64,
+    start: u32,
+    end: u32,
+) -> Vec<ToyResult> {
+    (start..end)
         .map(|toy| lee_toy(problem, cfg, lee, seed, toy))
-        .collect();
+        .collect()
+}
+
+/// Runs `n_toys` background-only toys across `workers` threads.
+///
+/// The calibration is bit-identical to the serial one: [`LeeCalibration`]
+/// sorts the maxima and averages the Euler characteristic, so the partition and
+/// the merge order cannot show up in the answer. That equality is asserted by a
+/// test rather than assumed, because "embarrassingly parallel" is exactly the
+/// claim that quietly stops being true when a toy starts depending on its
+/// neighbour.
+///
+/// # Panics
+///
+/// Panics if `n_toys` is zero, or if a worker panics.
+pub fn lee_calibrate_with(
+    problem: &ScanProblem<'_>,
+    cfg: &ScanConfig,
+    lee: &LeeConfig,
+    n_toys: u32,
+    seed: u64,
+    workers: usize,
+) -> LeeCalibration {
+    assert!(n_toys > 0, "a calibration needs at least one toy");
+    let workers = workers.clamp(1, n_toys as usize);
+    let toys = if workers == 1 {
+        lee_toys(problem, cfg, lee, seed, 0, n_toys)
+    } else {
+        schedule(problem, cfg, lee, seed, n_toys, workers)
+    };
     LeeCalibration::from_toys(lee, seed, n_toys, problem.system.voxel_count(), &toys)
+}
+
+/// Splits the toy range across scoped threads.
+#[cfg(not(target_arch = "wasm32"))]
+fn schedule(
+    problem: &ScanProblem<'_>,
+    cfg: &ScanConfig,
+    lee: &LeeConfig,
+    seed: u64,
+    n_toys: u32,
+    workers: usize,
+) -> Vec<ToyResult> {
+    let chunk = (n_toys as usize).div_ceil(workers);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
+            .map(|worker| {
+                let start = (worker * chunk) as u32;
+                let end = (((worker + 1) * chunk) as u32).min(n_toys);
+                scope.spawn(move || lee_toys(problem, cfg, lee, seed, start, end))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("a toy worker panicked"))
+            .collect()
+    })
+}
+
+/// The browser's scheduler: one thread, every toy in it.
+#[cfg(target_arch = "wasm32")]
+fn schedule(
+    problem: &ScanProblem<'_>,
+    cfg: &ScanConfig,
+    lee: &LeeConfig,
+    seed: u64,
+    n_toys: u32,
+    _workers: usize,
+) -> Vec<ToyResult> {
+    lee_toys(problem, cfg, lee, seed, 0, n_toys)
 }
 
 /// One background-only toy, reproducible from `(seed, toy)` alone.
@@ -794,6 +901,33 @@ mod tests {
             map[peak.voxel],
             peak.z
         );
+    }
+
+    #[test]
+    fn sharding_a_campaign_changes_no_toy() {
+        let (system, density, lambda0, dlambda_dx) = scene_2d(10);
+        let cfg = ScanConfig {
+            scales_voxels: vec![1.0],
+            top_k: 3,
+            ..ScanConfig::default()
+        };
+        let lee = LeeConfig { u0: 1.0, dim: 2 };
+        let problem = ScanProblem {
+            system: &system,
+            counts: &lambda0,
+            lambda0: &lambda0,
+            dlambda_dx: &dlambda_dx,
+            density: &density,
+            attenuation_gcm2: 1.0e3,
+        };
+        let serial = lee_calibrate_with(&problem, &cfg, &lee, 8, 42, 1);
+        let parallel = lee_calibrate_with(&problem, &cfg, &lee, 8, 42, 4);
+        assert_eq!(
+            serial, parallel,
+            "a shard boundary must not change a toy, a maximum or the merge"
+        );
+        // A different worker count is the same campaign, so the same key.
+        assert_eq!(serial.content_key, parallel.content_key);
     }
 
     #[test]
