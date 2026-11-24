@@ -5,11 +5,21 @@
 //! toys — because this is the run that produces the published report. M3's rate
 //! criterion is decided at the end of the report, from the Wilson interval of the
 //! exceedances: `10⁴` toys straddle the ±20% band around nominal 3σ, so the
-//! campaign has to be run at `10⁵` (~3 h on a CI runner) before that box can move.
+//! campaign has to be run at `10⁵` (~70 min on a CI runner) before that box can
+//! move.
+//!
+//! `UMBRA_LEE_DIM=3` runs the same campaign on a volume, so the upcrossing law
+//! is measured where an excursion is a sheet a ray cuts through rather than a
+//! strip along it. The two dimensions do not share a grid side: `1000³` is `10⁹`
+//! voxels and no campaign budget reaches it, so the volume default is the
+//! largest cube whose per-toy cost still leaves a five-figure campaign inside an
+//! afternoon. Ratios from the two scenes are comparable; rates are not, because
+//! the search space and the ray count per voxel are not.
 //! Env knobs:
 //!
 //! ```text
-//! UMBRA_LEE_GRID     scene width, default 1000
+//! UMBRA_LEE_DIM      search dimension, 2 or 3, default 2
+//! UMBRA_LEE_GRID     scene width, default 1000 (2-D) or 40 (3-D)
 //! UMBRA_LEE_TOYS     toy count, default 10 000
 //! UMBRA_LEE_U0       Euler anchor in sigma, default 2.5
 //! UMBRA_LEE_THREADS  worker threads, default all cores
@@ -26,7 +36,7 @@
 use std::fmt::Write as _;
 use std::time::Instant;
 
-use umbra_core::{Csr, Grid2, GridAny};
+use umbra_core::{Csr, Grid2, Grid3, GridAny};
 use umbra_forward::{RayCell, System};
 use umbra_stats::{
     chi2_mixture_p, lee_calibrate_with, rate_estimate, LeeConfig, ScanConfig, ScanProblem,
@@ -74,6 +84,48 @@ fn scene_2d(n: usize) -> (System, Vec<f32>, Vec<f32>, Vec<f32>) {
     (system, density, lambda0, dlambda_dx)
 }
 
+fn scene_3d(n: usize) -> (System, Vec<f32>, Vec<f32>, Vec<f32>) {
+    let grid = Grid3::new([n as u32, n as u32, n as u32], [0.0; 3], 0.01);
+    let plane = n * n;
+    let mut indptr = vec![0u32];
+    let mut indices = Vec::new();
+    let mut data = Vec::new();
+    // One ray along `z` per column, as the scan bench's 3-D scene: every voxel
+    // is seen by exactly one ray, which is the property the 2-D campaign rests
+    // on and the one the law is being tested with.
+    for column in 0..plane {
+        for k in 0..n {
+            indices.push((k * plane + column) as u32);
+            data.push(1.0f32);
+        }
+        indptr.push(indices.len() as u32);
+    }
+    let mut density = vec![2.65f32; grid.cell_count()];
+    let voxels = grid.cell_count();
+    let start = voxels / 3;
+    density[start..start + voxels / 50].fill(1.0);
+    let system = System {
+        l: Csr::new(indptr, indices, data),
+        rays: (0..plane)
+            .map(|_| RayCell {
+                det: 0,
+                zen: 0.0,
+                az: 0.0,
+                k_scale: 1.0,
+            })
+            .collect(),
+        grid: GridAny::Three(grid),
+        poses: Vec::new(),
+    };
+    let opacity = system.opacity(&density);
+    let lambda0: Vec<f32> = opacity
+        .iter()
+        .map(|&x| 1.0e3 * (-x / 1.0e3).exp())
+        .collect();
+    let dlambda_dx: Vec<f32> = lambda0.iter().map(|&l| -l / 1.0e3).collect();
+    (system, density, lambda0, dlambda_dx)
+}
+
 fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
     std::env::var(key)
         .ok()
@@ -82,7 +134,8 @@ fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
 }
 
 fn main() {
-    let n: usize = env_or("UMBRA_LEE_GRID", 1000);
+    let dim: u8 = env_or("UMBRA_LEE_DIM", 2);
+    let n: usize = env_or("UMBRA_LEE_GRID", if dim == 3 { 40 } else { 1000 });
     let toys: u32 = env_or("UMBRA_LEE_TOYS", 10_000);
     let u0: f32 = env_or("UMBRA_LEE_U0", 2.5);
     let seed: u64 = env_or("UMBRA_LEE_SEED", 0x00c0_ffee_u64);
@@ -91,7 +144,10 @@ fn main() {
         std::thread::available_parallelism().map_or(1, |t| t.get()),
     );
 
-    let (system, density, lambda0, dlambda_dx) = scene_2d(n);
+    let (system, density, lambda0, dlambda_dx) = match dim {
+        3 => scene_3d(n),
+        _ => scene_2d(n),
+    };
     let cfg = ScanConfig {
         scales_voxels: vec![1.0, 2.0],
         top_k: 10,
@@ -106,7 +162,7 @@ fn main() {
         density: &density,
         attenuation_gcm2: 1.0e3,
     };
-    let lee = LeeConfig { u0, dim: 2 };
+    let lee = LeeConfig { u0, dim };
 
     let started = Instant::now();
     // The scheduling lives in the library now: this bench used to hand-roll the
@@ -160,10 +216,11 @@ fn main() {
     };
 
     let mut report = String::new();
-    let _ = writeln!(report, "# LEE calibration — 2-D, {} toys\n", toys);
+    let shape = if dim == 3 { "³" } else { "²" };
+    let _ = writeln!(report, "# LEE calibration — {dim}-D, {toys} toys\n");
     let _ = writeln!(
         report,
-        "| | |\n|---|---|\n| Scene | {n}² voxels, {} rays |\n| Toys | {toys} |\n| Seed | `0x{seed:016x}` |\n| Threads | {threads} (one toy index range per worker) |\n| Euler anchor `u₀` | {u0}σ |\n| Runtime | {:.1} s ({:.1} ms/toy) |",
+        "| | |\n|---|---|\n| Scene | {n}{shape} voxels, {} rays |\n| Search dimension | {dim} |\n| Toys | {toys} |\n| Seed | `0x{seed:016x}` |\n| Threads | {threads} (one toy index range per worker) |\n| Euler anchor `u₀` | {u0}σ |\n| Runtime | {:.1} s ({:.1} ms/toy) |",
         system.ray_count(),
         elapsed.as_secs_f64(),
         elapsed.as_secs_f64() * 1.0e3 / f64::from(toys)
@@ -255,6 +312,18 @@ fn main() {
         f64::from(calibration.extrapolated_global_p(3.0))
             / f64::from(calibration.empirical_global_p(3.0)),
         calibration.maxima.iter().filter(|&&m| m >= 5.0).count()
+    );
+
+    // The machine-readable line the CI gate reads: `tools/lee-verdict.sh` needs
+    // the verdict, the toy count and the dimension without parsing prose, and an
+    // HTML comment keeps the line out of the rendered report.
+    let _ = writeln!(
+        report,
+        "\n<!-- lee-verdict verdict={verdict} toys={toys} dim={dim} rate={:.3e} low={:.3e} high={:.3e} threshold={} -->",
+        estimate.rate,
+        estimate.low,
+        estimate.high,
+        model_3sigma.map_or("none".to_string(), |threshold| format!("{threshold:.2}")),
     );
 
     print!("{report}");
