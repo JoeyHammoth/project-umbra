@@ -1475,7 +1475,7 @@ mod tests {
         // one-sided scan has to prefer it to noise.
         let rays: Vec<usize> = {
             let system = &core.systems.get("sys").expect("system").system;
-            let mut crossing = vec![0usize; 16];
+            let mut crossing = [0usize; 16];
             for ray in 0..system.ray_count() {
                 for (column, _) in system.l.row(ray) {
                     crossing[column % 16] += 1;
