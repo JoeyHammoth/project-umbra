@@ -8,11 +8,13 @@
  * of merely looking different.
  *
  * The two panels answer different questions and are deliberately not on one
- * colour scale. Density is a positive quantity, so air is black and the ramp runs
- * from indigo to pale yellow. `Z` is a significance: it is fixed at 0–5σ rather
+ * colour scale. Density is a positive quantity, drawn from indigo to pale yellow
+ * across the field's own positive range — windowed, not 0-to-peak, because a
+ * reconstruction is mostly rock near 2.65 and a zero-to-peak ramp paints it as a
+ * flat slab — and the legend prints both ends of that window, so the contrast on
+ * show is stated rather than implied. `Z` is a significance: fixed at 0–5σ rather
  * than normalised to its own peak, because a ramp that stretched a null field to
- * full brightness would make noise look like a detection — and the density panel
- * already shows where the mass is.
+ * full brightness would make noise look like a detection.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -33,6 +35,23 @@ export interface DensityViewProps {
 
 /** Full scale of the `Z` panel, in sigma. */
 export const Z_CEILING = 5;
+
+/**
+ * The window a field is drawn on: its smallest positive value and its peak.
+ *
+ * Zero is excluded from the low end because air is not part of the rock's range:
+ * including it would undo the windowing for any field that has a hole in it.
+ */
+export function rangeOf(field: Float32Array): { lo: number; hi: number } {
+  let lo = Number.POSITIVE_INFINITY;
+  let hi = 0;
+  for (const value of field) {
+    if (!(value > 0)) continue;
+    if (value < lo) lo = value;
+    if (value > hi) hi = value;
+  }
+  return hi > 0 ? { lo: Number.isFinite(lo) ? lo : 0, hi } : { lo: 0, hi: 0 };
+}
 
 /** The largest value in the field, which sets the top of the ramp. */
 export function peakOf(density: Float32Array): number {
@@ -121,15 +140,17 @@ export function paint(
 ): { data: Uint8ClampedArray<ArrayBuffer>; height: number } {
   const height = Math.max(1, Math.ceil(density.length / width));
   const data = new Uint8ClampedArray(width * height * 4);
-  const peak = peakOf(density);
-  const scale = peak > 0 ? 1 / peak : 0;
+  const { lo, hi } = rangeOf(density);
+  const span = hi - lo;
   for (let index = 0; index < density.length; index += 1) {
     const value = density[index] ?? 0;
     // Opaque everywhere, black where the field is zero: a hole in the rock is
     // black structure, not a window onto the page behind the canvas.
     data[index * 4 + 3] = 255;
-    if (!(value > 0) || scale === 0) continue;
-    const [r, g, b] = rampAt(value * scale);
+    if (!(value > 0) || hi <= 0) continue;
+    // A field with no spread is drawn mid-ramp: any single colour would imply a
+    // position in a range that does not exist.
+    const [r, g, b] = rampAt(span > 0 ? (value - lo) / span : 0.5);
     data[index * 4] = r;
     data[index * 4 + 1] = g;
     data[index * 4 + 2] = b;
@@ -243,9 +264,9 @@ export function DensityView({
           onPointerLeave={() => setHover(null)}
         />
         <div className="density-legend" aria-hidden="true">
-          <span>0</span>
+          <span>{rangeOf(density ?? new Float32Array()).lo.toFixed(2)}</span>
           <span className="density-ramp" style={{ background: LEGEND }} />
-          <span>{peakOf(density ?? new Float32Array()).toFixed(2)} g cm⁻³</span>
+          <span>{rangeOf(density ?? new Float32Array()).hi.toFixed(2)} g cm⁻³</span>
         </div>
         <figcaption>
           {summary}
