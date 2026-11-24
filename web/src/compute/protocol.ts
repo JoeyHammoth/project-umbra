@@ -134,6 +134,11 @@ export interface Results {
      * rather than being re-derived in JavaScript.
      */
     meanEulerAtU0: number;
+    /**
+     * Standard error of that mean: the model's own width, drawn as a band so
+     * the branch is not read as a normalisation measured without error.
+     */
+    eulerStderr: number;
   };
   MCMC: { samples: ArrayBufferView; logEvidence: number | null };
   DESIGN: { utility: ArrayBufferView; greedyOrder: number[] };

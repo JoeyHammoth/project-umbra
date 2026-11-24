@@ -55,8 +55,12 @@ export interface DensityViewProps {
   leeToys?: number;
   /** Mean Euler characteristic at the anchor; 0 when no toy crossed it. */
   leeMeanEuler?: number;
+  /** Standard error of that mean, drawn as a band around the model. */
+  leeEulerStderr?: number;
   /** The Euler anchor, in sigma. */
   leeU0?: number;
+  /** The largest maximum in the null, where the measured curve stops. */
+  leeMaxZ?: number;
 }
 
 /**
@@ -143,7 +147,9 @@ export function DensityView({
   leePeakZ = 0,
   leeToys = 0,
   leeMeanEuler = 0,
+  leeEulerStderr = 0,
   leeU0 = 0,
+  leeMaxZ = 0,
 }: DensityViewProps) {
   const densityCanvas = useRef<HTMLCanvasElement | null>(null);
   const scanCanvas = useRef<HTMLCanvasElement | null>(null);
@@ -288,7 +294,9 @@ export function DensityView({
           peakZ={leePeakZ}
           toys={leeToys}
           meanEuler={leeMeanEuler}
+          meanEulerStderr={leeEulerStderr}
           u0={leeU0}
+          maxToyZ={leeMaxZ}
         />
       ) : null}
     </div>

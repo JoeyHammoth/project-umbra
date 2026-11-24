@@ -5,6 +5,7 @@ import {
   P_FLOOR,
   Z_AXIS,
   curvePoints,
+  eulerBand,
   extrapolatedPoints,
   logFraction,
   modelGlobalP,
@@ -74,6 +75,40 @@ test('the model sits above the local p, and above the anchor it is defined', () 
     modelGlobalP(5.0, 2.5, 8.1) < modelGlobalP(4.0, 2.5, 8.1),
     'and the tail falls with the threshold, as a tail must',
   );
+});
+
+test('the extrapolation counts regions, so it is 1 − e^{−⟨N⟩} with no polynomial', () => {
+  // 8.119 regions at 2.5σ, scaled to 5σ by the upcrossing law. The campaign's
+  // 10⁵ toys put the same tail at 7.65e-4, so this is the curve those toys test.
+  const mean = normalTail(5) + 8.119 * Math.exp(-(25 - 6.25) / 2);
+  assert.ok(
+    Math.abs(modelGlobalP(5, 2.5, 8.119) - (1 - Math.exp(-mean))) < 1e-12,
+    'the count becomes a probability, not a rate',
+  );
+  assert.ok(
+    Math.abs(modelGlobalP(5, 2.5, 8.119) / 6.876e-4 - 1) < 0.01,
+    'and lands on the toys’ 5σ tail rather than the 2× the (z/u₀) factor gave',
+  );
+  // At 3σ the count is above one, where the linear form reported p = 1 across
+  // the whole 3–4σ span; the toys say 0.86.
+  const p3 = modelGlobalP(3, 2.5, 8.119);
+  assert.ok(p3 > 0.8 && p3 < 0.95, `p(3σ) = ${p3} must be a probability, not a clamp`);
+});
+
+test('the model carries the anchor’s standard error as a band', () => {
+  const band = eulerBand(2.5, 8.119, 0.01);
+  assert.equal(band.centre.length, 70);
+  assert.equal(band.low.length, 70);
+  assert.equal(band.high.length, 70);
+  assert.ok(
+    band.high[0]!.y > band.centre[0]!.y && band.low[0]!.y < band.centre[0]!.y,
+    'the band straddles the model on both sides',
+  );
+  const wide = eulerBand(2.5, 8.119, 0.5);
+  const gap = (edge: typeof band) => edge.high[10]!.y - edge.low[10]!.y;
+  assert.ok(gap(wide) > gap(band), 'a wider error is a wider band');
+  assert.deepEqual(eulerBand(2.5, 8.119, 0).low, [], 'no error, no band');
+  assert.deepEqual(eulerBand(2.5, 0, 0.01).low, [], 'no anchor, no band');
 });
 
 test('the extrapolation is drawn only with an anchor, from that anchor to the edge', () => {
