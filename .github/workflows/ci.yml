@@ -7,9 +7,21 @@ on:
   workflow_dispatch:
     inputs:
       lee_toys:
-        description: 'LEE toys for the calibration campaign (10^5 needs ~3 h)'
+        description: 'LEE toys for the calibration campaign (10^5 needs ~70 min)'
         required: false
         default: '10000'
+      lee_dim:
+        description: 'LEE search dimension, 2 or 3'
+        required: false
+        default: '2'
+      lee_seed:
+        description: 'LEE toy seed in decimal; empty uses the bench default'
+        required: false
+        default: ''
+      lee_confirm:
+        description: 'Set by the campaign when it dispatches its own confirmation'
+        required: false
+        default: 'false'
   # The calibration campaign is 10⁴ full-size scans; its numbers only move when
   # the scan or the estimator does, so it runs weekly rather than per PR.
   schedule:
@@ -142,6 +154,13 @@ jobs:
     name: LEE calibration campaign
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
+    # The campaign acts on its own verdict: it may dispatch a confirmation run and
+    # it may open an issue when the verdict moves. Both grants are scoped here, so
+    # the gates keep their read-only token.
+    permissions:
+      contents: read
+      actions: write
+      issues: write
     # A second line of defence against two campaigns overlapping on one ref: the
     # second waits here instead of cancelling the first, because the losing run
     # may be the only one that reached the interesting tail.
@@ -162,10 +181,14 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Run the LEE campaign on 10⁶ voxels
+      # The scene size is the bench's per-dimension default (1000² in 2-D, 40³ in
+      # 3-D) rather than a workflow constant: 1000³ is 10⁹ voxels and no campaign
+      # here reaches it, so a pinned side would be wrong for one of the two.
+      - name: Run the LEE campaign
         env:
-          UMBRA_LEE_GRID: 1000
+          UMBRA_LEE_DIM: ${{ github.event.inputs.lee_dim || '2' }}
           UMBRA_LEE_TOYS: ${{ github.event.inputs.lee_toys || '10000' }}
+          UMBRA_LEE_SEED: ${{ github.event.inputs.lee_seed }}
           # Absolute: cargo runs workflows' benches with the *package* directory
           # as the working directory, so a relative path lands inside the crate.
           UMBRA_LEE_REPORT: ${{ github.workspace }}/target/lee-calibration/report.md
@@ -174,6 +197,104 @@ jobs:
       - name: Upload report
         uses: actions/upload-artifact@v4
         with:
-          name: lee-calibration-2d
+          name: lee-calibration-${{ github.event.inputs.lee_dim || '2' }}d
           path: ${{ github.workspace }}/target/lee-calibration/report.md
           retention-days: 90
+
+      # The verdict is read from the report's machine line rather than from the
+      # prose, so rewording a sentence cannot break the gate and a campaign that
+      # writes no line fails here instead of passing.
+      - name: Read the verdict
+        id: verdict
+        run: |
+          set -euo pipefail
+          bash tools/lee-verdict.sh target/lee-calibration/report.md | tr ' ' '\n' >> "$GITHUB_OUTPUT"
+          cat target/lee-calibration/report.md | sed -n 's/.*<!-- lee-verdict \(.*\) -->.*/\1/p'
+
+      # A 10⁴ run whose interval straddles the band has not answered the question
+      # — it has established that the answer needs more toys — so the campaign
+      # dispatches the 10⁵ run the criterion asks for instead of leaving it to
+      # whoever reads the log. `lee_confirm` is what stops that becoming a loop: a
+      # confirmation never confirms itself, and a scheduled run only reports, so a
+      # Monday cannot start a three-hour job nobody asked for.
+      - name: Dispatch a confirmation
+        if: >-
+          steps.verdict.outputs.verdict == 'UNDECIDED' &&
+          fromJSON(steps.verdict.outputs.toys) < 100000 &&
+          github.event.inputs.lee_confirm != 'true' &&
+          github.event_name != 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIM: ${{ steps.verdict.outputs.dim }}
+        run: |
+          set -euo pipefail
+          # A fresh sample from the run id: a confirmation on the seed that was
+          # undecided would describe the same draw twice, and a run id is a seed
+          # a reader can look up afterwards.
+          seed=$(( (GITHUB_RUN_ID % 2147483646) + 1 ))
+          echo "undecided at ${{ steps.verdict.outputs.toys }} toys; dispatching 10^5 (${DIM}-D, seed $seed)"
+          gh workflow run ci.yml --ref "$GITHUB_REF_NAME" \
+            -f lee_toys=100000 \
+            -f lee_dim="$DIM" \
+            -f lee_seed="$seed" \
+            -f lee_confirm=true
+
+      # Only a run with at least as many toys in the same dimension can overturn
+      # the recorded verdict; a smaller one cannot, and comparing across
+      # dimensions would compare two different search spaces.
+      - name: Compare with the recorded verdict
+        id: compare
+        env:
+          VERDICT: ${{ steps.verdict.outputs.verdict }}
+          TOYS: ${{ steps.verdict.outputs.toys }}
+          DIM: ${{ steps.verdict.outputs.dim }}
+        run: |
+          set -euo pipefail
+          recorded=docs/calibration/recorded-verdict.txt
+          entry=$(sed -n 's/^verdict=\(\S*\) toys=\([0-9]*\) dim=\([0-9]*\).*/\1 \2 \3/p' "$recorded" | tail -1)
+          if [ -z "$entry" ]; then
+            echo "no verdict= entry in $recorded" >&2
+            exit 1
+          fi
+          read -r rec_verdict rec_toys rec_dim <<<"$entry"
+          echo "recorded:  $rec_verdict at $rec_toys toys, ${rec_dim}-D"
+          echo "this run:  $VERDICT at $TOYS toys, ${DIM}-D"
+          changed=false
+          if [ "$DIM" != "$rec_dim" ]; then
+            echo "different search dimension — not comparable"
+          elif [ "$TOYS" -lt "$rec_toys" ]; then
+            echo "fewer toys than the recorded run — cannot overturn it"
+          elif [ "$VERDICT" = "$rec_verdict" ]; then
+            echo "unchanged"
+          else
+            changed=true
+          fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+      # A verdict that moved is the one thing the campaign exists to say, so it
+      # says it where someone will see it rather than only in a log and an
+      # artifact. An open issue for the same change is commented on instead of
+      # duplicated, because a weekly run would otherwise open one a week.
+      - name: Open an issue when the verdict changes
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERDICT: ${{ steps.verdict.outputs.verdict }}
+          TOYS: ${{ steps.verdict.outputs.toys }}
+          DIM: ${{ steps.verdict.outputs.dim }}
+          RATE: ${{ steps.verdict.outputs.rate }}
+          LOW: ${{ steps.verdict.outputs.low }}
+          HIGH: ${{ steps.verdict.outputs.high }}
+          THRESHOLD: ${{ steps.verdict.outputs.threshold }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="LEE calibration verdict changed to $VERDICT"
+          body=$(printf 'The %s-D campaign now decides **%s** at %s toys (model 3σ threshold `z = %s`; rate %s, Wilson 95%% [%s, %s]).\n\nRun: %s\n\nMove `docs/calibration/recorded-verdict.txt`, the M3 box in `docs/ROADMAP.md` and spec §11.1 with the report this run produced — or say here why the change is not one.\n' \
+            "$DIM" "$VERDICT" "$TOYS" "$THRESHOLD" "$RATE" "$LOW" "$HIGH" "$RUN_URL")
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --label spec:umbra --body "$body"
+          fi
