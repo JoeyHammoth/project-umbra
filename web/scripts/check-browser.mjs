@@ -54,7 +54,9 @@ const EXPECTED = {
   peakZ: 1.66,
   voxel: 529,
   peakAlpha: 1.0,
-  records: 5,
+  records: 6,
+  /** Toys the page's look-elsewhere calibration runs; see `LEE_TOYS` in App. */
+  leeToys: 200,
   // Every voxel of a 32 x 32 grid carries a value, so every pixel is painted.
   // Fewer means part of the field never reached the canvas. "Lit" is a non-zero
   // red channel, which the heatmap's own first stop guarantees for any density
@@ -376,8 +378,49 @@ async function main() {
       );
     }
 
+    // The look-elsewhere stage is what turns a local Z into a statement about
+    // the whole search. It must be about the same peak the scan reported: a
+    // calibration paired with another dataset would still print a plausible
+    // number, so the peak is compared rather than merely present.
+    const lee = await client.send('Runtime.evaluate', {
+      expression: `(() => {
+        const node = document.querySelector('[data-testid="lee"]');
+        if (!node) return { found: false };
+        return {
+          found: true,
+          toys: Number(node.dataset.toys),
+          peakZ: Number(node.dataset.peakZ),
+          globalP: Number(node.dataset.globalP),
+        };
+      })()`,
+      returnByValue: true,
+    });
+    const calibrated = lee.result?.result?.value;
+    if (!calibrated?.found) {
+      throw new Error(
+        'the page has no look-elsewhere readout\n' + diagnostics(client, logLines),
+      );
+    }
+    if (calibrated.toys !== EXPECTED.leeToys) {
+      throw new Error(
+        `the calibration ran ${String(calibrated.toys)} toys, not ${EXPECTED.leeToys}`,
+      );
+    }
+    // The status line carries the peak to two decimals, so compare at that
+    // precision rather than demanding the full f32.
+    if (Math.abs(calibrated.peakZ - observed.peakZ) > 0.005) {
+      throw new Error(
+        `the calibration is about a ${calibrated.peakZ.toFixed(2)}σ peak, but the scan reported ${observed.peakZ}σ`,
+      );
+    }
+    if (!(calibrated.globalP > 0 && calibrated.globalP <= 1)) {
+      throw new Error(
+        `the calibration reported a global p of ${String(calibrated.globalP)}`,
+      );
+    }
+
     client.close();
-    return `${text} [indexeddb records: ${records}] [canvas 32x32, ${drawn.lit} lit] [scan 32x32, distinct]`;
+    return `${text} [indexeddb records: ${records}] [canvas 32x32, ${drawn.lit} lit] [scan 32x32, distinct] [lee ${calibrated.toys} toys, p ${calibrated.globalP}]`;
   } finally {
     chrome.kill();
     // A killed Chrome can leave a renderer holding the inherited stderr pipe,

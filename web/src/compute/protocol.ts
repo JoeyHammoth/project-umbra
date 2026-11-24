@@ -61,7 +61,11 @@ export interface Payloads {
     iterations: number;
   };
   SCAN: { countsKey: string; scalesVoxels: number[]; profileNuisances: boolean };
-  LEE_CALIB: { scanKey: string; toys: number; u0: number };
+  /**
+   * The scan's own configuration plus a toy budget: the calibration has to run
+   * the same counts, bank and λ⁰ as the scan it corrects.
+   */
+  LEE_CALIB: { countsKey: string; scalesVoxels: number[]; toys: number; u0: number };
   MCMC: { countsKey: string; prior: VoidPriorSpec; walkers: number; steps: number };
   DESIGN: { sceneKey: string; candidateCount: number; kappa: number };
   PSF: { systemKey: string; voxel: number };
@@ -104,7 +108,27 @@ export interface Results {
     setupMs: number;
     correlateMs: number;
   };
-  LEE_CALIB: { globalPValues: ArrayBufferView };
+  LEE_CALIB: {
+    /** Global `p` at 0, 0.05, …, 6 sigma: the toys' maximum-`Z` null. */
+    globalPValues: ArrayBufferView;
+    /** The observed scan's peak, so the curve cannot be paired with another. */
+    peakZ: number;
+    /** Empirical global `p` at that peak. */
+    globalPAtPeak: number;
+    /** Toys the peak was matched or beaten by. */
+    toysAtOrAbovePeak: number;
+    toys: number;
+    /** The largest maximum in the null. */
+    maxToyZ: number;
+    /**
+     * Extrapolated global-3σ threshold, or `null` when the Euler anchor never
+     * fired — extrapolating from zero excursion sets would return the local `p`
+     * under the label "global".
+     */
+    zAt3Sigma: number | null;
+    /** Toys above the anchor; the support behind `zAt3Sigma`. */
+    toysAboveU0: number;
+  };
   MCMC: { samples: ArrayBufferView; logEvidence: number | null };
   DESIGN: { utility: ArrayBufferView; greedyOrder: number[] };
   PSF: { psf: ArrayBufferView; coverage: ArrayBufferView };
