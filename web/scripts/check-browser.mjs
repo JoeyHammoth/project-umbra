@@ -428,10 +428,13 @@ async function main() {
         if (!svg) return { found: false };
         const path = svg.querySelector('path.global-p-curve');
         const d = path?.getAttribute('d') ?? '';
+        const model = svg.querySelector('path.global-p-model')?.getAttribute('d') ?? '';
         return {
           found: true,
           points: (d.match(/[ML]/g) ?? []).length,
           label: svg.getAttribute('aria-label') ?? '',
+          model: svg.getAttribute('data-model'),
+          modelPoints: (model.match(/[ML]/g) ?? []).length,
         };
       })()`,
       returnByValue: true,
@@ -447,6 +450,39 @@ async function main() {
     }
     if (!curveDrawn.label.includes('background-only toys')) {
       throw new Error(`the curve's label does not say what it is from: ${curveDrawn.label}`);
+    }
+    // The model branch is drawn only when the toys measured an excursion at the
+    // anchor. Either way the SVG must agree with itself: a `model` label with no
+    // path is an empty promise, and a path under a `none` label is a model drawn
+    // from nothing.
+    if (curveDrawn.model === 'model') {
+      if (!(curveDrawn.modelPoints >= 40)) {
+        throw new Error(
+          `the page says it draws the Gross–Vitells model but its path has ${String(curveDrawn.modelPoints)} points`,
+        );
+      }
+    } else if (curveDrawn.model !== 'none' || curveDrawn.modelPoints !== 0) {
+      throw new Error(
+        `the model branch is ${String(curveDrawn.model)} with ${String(curveDrawn.modelPoints)} points`,
+      );
+    }
+
+    // A rate without its interval reads as precise. The peak's p must arrive
+    // with its Wilson width and the floor of what this toy count can express.
+    const reading = await client.send('Runtime.evaluate', {
+      expression: `document.querySelector('[data-testid="lee"]')?.textContent ?? ''`,
+      returnByValue: true,
+    });
+    const paragraph = reading.result?.result?.value ?? '';
+    if (!/± 0\.\d{3} at 95%/.test(paragraph)) {
+      throw new Error(
+        `the global p does not quote its 95% interval: ${paragraph.slice(0, 160)}`,
+      );
+    }
+    if (!/cannot express anything below 0\.\d{4}/.test(paragraph)) {
+      throw new Error(
+        `the readout does not say what the toy count can resolve: ${paragraph.slice(0, 160)}`,
+      );
     }
 
     // The window is a control, not a caption. Moving both sliders to the full
@@ -528,7 +564,7 @@ async function main() {
     }
 
     client.close();
-    return `${text} [indexeddb records: ${records}] [canvas 32x32, ${drawn.lit} lit] [scan 32x32, distinct] [lee ${calibrated.toys} toys, p ${calibrated.globalP}] [window moved, ${windowed.changed} bytes] [curve ${curveDrawn.points} points] [toys 50, ${retuned.ms}]`;
+    return `${text} [indexeddb records: ${records}] [canvas 32x32, ${drawn.lit} lit] [scan 32x32, distinct] [lee ${calibrated.toys} toys, p ${calibrated.globalP}] [window moved, ${windowed.changed} bytes] [curve ${curveDrawn.points} points] [model ${curveDrawn.model === 'model' ? `${curveDrawn.modelPoints} points` : 'none'}] [toys 50, ${retuned.ms}]`;
   } finally {
     chrome.kill();
     // A killed Chrome can leave a renderer holding the inherited stderr pipe,

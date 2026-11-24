@@ -128,6 +128,12 @@ export interface Results {
     zAt3Sigma: number | null;
     /** Toys above the anchor; the support behind `zAt3Sigma`. */
     toysAboveU0: number;
+    /**
+     * Mean Euler characteristic at the anchor: the normalisation the
+     * Gross–Vitells extrapolation scales by. Drawn, so it crosses the wire
+     * rather than being re-derived in JavaScript.
+     */
+    meanEulerAtU0: number;
   };
   MCMC: { samples: ArrayBufferView; logEvidence: number | null };
   DESIGN: { utility: ArrayBufferView; greedyOrder: number[] };

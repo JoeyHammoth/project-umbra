@@ -118,6 +118,7 @@ export interface LeeCalibrationOut {
    */
   zAt3Sigma: number | null | undefined;
   toysAboveU0: number;
+  meanEulerAtU0: number;
 }
 
 /**
@@ -311,6 +312,7 @@ export function handleTask(core: ComputeCore, request: TaskRequest): TaskEvent {
             maxToyZ: outcome.maxToyZ,
             zAt3Sigma: outcome.zAt3Sigma ?? null,
             toysAboveU0: outcome.toysAboveU0,
+            meanEulerAtU0: outcome.meanEulerAtU0,
           },
           transfer: [transferable(globalPValues)],
         };

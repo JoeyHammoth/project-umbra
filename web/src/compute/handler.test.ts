@@ -114,6 +114,7 @@ class FakeCore implements ComputeCore {
       maxToyZ: 4.9,
       zAt3Sigma: 4.75,
       toysAboveU0: 30,
+      meanEulerAtU0: 8.125,
     };
   }
 
@@ -313,6 +314,7 @@ test('the look-elsewhere calibration transfers its curve and keeps the scan it c
     maxToyZ: number;
     zAt3Sigma: number | null;
     toysAboveU0: number;
+    meanEulerAtU0: number;
   }>(event);
   assert.equal(result.globalPValues, core.leeCurve, 'the curve is handed over, not rebuilt');
   assert.deepEqual(
@@ -327,6 +329,11 @@ test('the look-elsewhere calibration transfers its curve and keeps the scan it c
   assert.equal(result.maxToyZ, 4.9);
   assert.equal(result.zAt3Sigma, 4.75);
   assert.equal(result.toysAboveU0, 30);
+  assert.equal(
+    result.meanEulerAtU0,
+    8.125,
+    'the Euler anchor crosses too: the page draws the model it normalises',
+  );
   assert.deepEqual(core.calls, ['lee counts-key 1,2 200 2.5']);
 });
 

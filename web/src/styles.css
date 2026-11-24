@@ -233,6 +233,17 @@ ol.stages li {
   stroke-width: 2;
 }
 
+.global-p-model {
+  fill: none;
+  stroke: var(--muted);
+  stroke-dasharray: 2 4;
+  stroke-width: 1.5;
+}
+
+.global-p-model-label {
+  font-size: 10px;
+}
+
 .global-p-threshold {
   stroke: var(--muted);
   stroke-dasharray: 5 5;

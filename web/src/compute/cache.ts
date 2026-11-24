@@ -33,8 +33,13 @@ import type { CacheStore, CachedResult } from './bus.ts';
 
 const DB_NAME = 'umbra-compute';
 const STORE = 'results';
-/** v2 records carry their own key, age and size; v1 stored the bare result. */
-const VERSION = 2;
+/**
+ * v3 because a result gained a field: `LEE_CALIB` now carries `meanEulerAtU0`,
+ * and a v2 record would come back without it and be drawn as if the anchor had
+ * never fired. v2 records carry their own key, age and size; v1 stored the bare
+ * result.
+ */
+const VERSION = 3;
 
 /** How much the cache may hold before the oldest entries are dropped. */
 export interface CacheBudget {
