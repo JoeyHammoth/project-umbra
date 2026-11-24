@@ -89,6 +89,51 @@ ol.stages li {
   font-size: 0.92rem;
 }
 
+.density {
+  margin: 0;
+}
+
+.density canvas {
+  display: block;
+  width: 100%;
+  max-width: 32rem;
+  aspect-ratio: 1 / 1;
+  /* One voxel is one pixel: a scaled-up 32 x 32 canvas reads as a map, and a
+     smoothed one hides exactly the single-voxel features a reconstruction is
+     being eyeballed for. */
+  image-rendering: pixelated;
+  border: 1px solid var(--rule);
+  border-radius: 0.5rem;
+  background: #05060a;
+}
+
+.density figcaption {
+  margin-top: 0.7rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.exposure {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin-top: 1.25rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.exposure input {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.exposure output {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  min-width: 4.5rem;
+  text-align: right;
+}
+
 footer {
   margin-top: 3rem;
   color: var(--muted);
@@ -105,5 +150,9 @@ code {
   ol.stages li {
     grid-template-columns: 1fr;
     gap: 0.15rem;
+  }
+
+  .exposure {
+    flex-wrap: wrap;
   }
 }

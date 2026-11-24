@@ -55,6 +55,9 @@ const EXPECTED = {
   voxel: 529,
   peakAlpha: 1.0,
   records: 5,
+  // Every voxel of a 32 x 32 grid carries a value, so every pixel is painted.
+  // Fewer means part of the field never reached the canvas.
+  litVoxels: 1024,
 };
 
 /** The status line, with every number captured so it can be compared. */
@@ -107,7 +110,13 @@ async function startPreview() {
   server.stderr.on('data', (chunk) => {
     stderr += chunk;
   });
-  const stop = () => server.kill();
+  const stop = () => {
+    server.kill();
+    // Detach the killed server from the event loop: the check is over either
+    // way, and waiting on a process the OS has already reaped is how a one-shot
+    // harness ends up hanging after printing its result.
+    server.unref();
+  };
   for (let attempt = 0; attempt < 150; attempt += 1) {
     if (server.exitCode !== null) {
       throw new Error(`the preview server exited (${server.exitCode}):\n${stderr}`);
@@ -300,10 +309,47 @@ async function main() {
       );
     }
 
+    // The canvas is the deliverable, not the status line. A field can be
+    // transferred correctly and still never reach a pixel, so read back what the
+    // page painted rather than trusting that a `density` prop was passed.
+    const painted = await client.send('Runtime.evaluate', {
+      expression: `(() => {
+        const canvas = document.querySelector('canvas[data-testid="density"]');
+        if (!canvas) return { found: false };
+        const context = canvas.getContext('2d');
+        if (!context) return { found: true, width: canvas.width, height: canvas.height, lit: -1 };
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        let lit = 0;
+        for (let i = 0; i < pixels.length; i += 4) { if (pixels[i] > 0) lit += 1; }
+        return { found: true, width: canvas.width, height: canvas.height, lit };
+      })()`,
+      returnByValue: true,
+    });
+    const drawn = painted.result?.result?.value;
+    if (!drawn?.found) {
+      throw new Error('the page has no density canvas\n' + diagnostics(client, logLines));
+    }
+    if (drawn.width !== 32 || drawn.height !== 32) {
+      throw new Error(
+        `the density canvas is ${drawn.width} x ${drawn.height}, not the 32 x 32 grid`,
+      );
+    }
+    if (drawn.lit !== EXPECTED.litVoxels) {
+      throw new Error(
+        `the density canvas painted ${String(drawn.lit)} of ${EXPECTED.litVoxels} voxels`,
+      );
+    }
+
     client.close();
-    return `${text} [indexeddb records: ${records}]`;
+    return `${text} [indexeddb records: ${records}] [canvas 32x32, ${drawn.lit} lit]`;
   } finally {
     chrome.kill();
+    // A killed Chrome can leave a renderer holding the inherited stderr pipe,
+    // and on Windows that keeps Node's loop alive after the result is printed.
+    // Release the handles rather than waiting for processes this script no
+    // longer needs.
+    chrome.stderr?.destroy();
+    chrome.unref();
     stopPreview();
     try {
       rmSync(profile, { recursive: true, force: true });

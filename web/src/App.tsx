@@ -1,10 +1,31 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
+import { DensityView } from './DensityView';
 import { TaskFailure, contentKey } from './compute/bus';
 import { createBrowserCompute } from './compute/compute';
-import type { CacheKind } from './compute/compute';
+import type { BrowserCompute, CacheKind } from './compute/compute';
 import { PIPELINE_STAGES } from './compute/protocol';
 import sceneJson from './scenes/default.json?raw';
+
+/**
+ * Voxels per row, which is what a canvas needs and `BUILD_SYSTEM` does not report.
+ *
+ * The operator's summary is rays × voxels; the grid's aspect is in the scene
+ * document, which is also the file the core rasterised, so the two cannot
+ * disagree about how the field is laid out.
+ */
+const GRID_COLUMNS = (JSON.parse(sceneJson) as { grid: { n: [number, number] } }).grid.n[0];
+
+/** The exposure the page opens on, in seconds. */
+const DEFAULT_EXPOSURE = 3600;
+const MIN_EXPOSURE = 600;
+const MAX_EXPOSURE = 86_400;
+const EXPOSURE_STEP = 600;
+
+/** Seconds as hours, which is how a muon exposure is usually quoted. */
+function formatExposure(seconds: number): string {
+  return `${(seconds / 3600).toFixed(1)} h`;
+}
 
 type BuildState =
   | { status: 'running' }
@@ -63,26 +84,50 @@ function describe(state: BuildState, cache: CacheKind | null): string {
 }
 
 /**
- * The landing page, with the first four stages actually running.
+ * The landing page: five stages running for real, and the reconstruction drawn.
  *
- * `BUILD_SYSTEM` → `EXPECTED` → `SIMULATE` → `RECON` runs on mount rather than
- * behind a button, so the wiring is exercised every time the page loads: a broken
- * worker, a mismatched module or a protocol slip says so instead of leaving a
- * plausible looking scaffold.
+ * `BUILD_SYSTEM` → `EXPECTED` → `SIMULATE` → `RECON` → `SCAN` runs on mount rather
+ * than behind a button, so the wiring is exercised every time the page loads: a
+ * broken worker, a mismatched module or a protocol slip says so instead of
+ * leaving a plausible looking scaffold.
+ *
+ * The exposure slider re-runs the same sequence with a different `SIMULATE` key.
+ * Nothing upstream of it changes identity — the operator and λ are content
+ * addressed, so only the counts, the density and the scan are recomputed — and
+ * the bus caches at 3600 s, so returning to the opening exposure is instant.
  */
 export function App() {
   const [state, setState] = useState<BuildState>({ status: 'running' });
   const [cache, setCache] = useState<CacheKind | null>(null);
+  const [requested, setRequested] = useState(DEFAULT_EXPOSURE);
+  const [exposure, setExposure] = useState(DEFAULT_EXPOSURE);
+  const started = useRef<Promise<BrowserCompute> | null>(null);
+
+  /** One bus for the page's lifetime: a slider move must not spawn a new pool. */
+  const compute = (): Promise<BrowserCompute> => (started.current ??= createBrowserCompute());
+
+  useEffect(() => {
+    const created = compute();
+    return () => {
+      void created.then(({ bus }) => bus.close());
+    };
+  }, []);
+
+  // A drag fires dozens of input events; the pipeline should run once it stops.
+  // The image keeps showing the previous exposure until the new one lands.
+  useEffect(() => {
+    if (requested === exposure) return;
+    const timer = setTimeout(() => setExposure(requested), 200);
+    return () => clearTimeout(timer);
+  }, [requested, exposure]);
 
   useEffect(() => {
     let live = true;
-    let bus: Awaited<ReturnType<typeof createBrowserCompute>>['bus'] | null = null;
     void (async () => {
       try {
-        const compute = await createBrowserCompute();
-        bus = compute.bus;
+        const { bus, cache: kind } = await compute();
         if (!live) return;
-        setCache(compute.cache);
+        setCache(kind);
 
         const buildPayload = { sceneJson };
         const build = await bus.submit({
@@ -106,7 +151,7 @@ export function App() {
           payload: expectedPayload,
         });
 
-        const simulatePayload = { expectedKey, seed: '7', exposureSeconds: 3600 };
+        const simulatePayload = { expectedKey, seed: '7', exposureSeconds: exposure };
         const countsKey = await contentKey('SIMULATE', simulatePayload);
         const counts = await bus.submit({
           id: crypto.randomUUID(),
@@ -171,9 +216,10 @@ export function App() {
     })();
     return () => {
       live = false;
-      bus?.close();
     };
-  }, []);
+  }, [exposure]);
+
+  const shown = state.status === 'ok' ? state : null;
 
   return (
     <main className="shell">
@@ -186,6 +232,36 @@ export function App() {
           exists, and choose where the next detector should go.
         </p>
       </header>
+
+      <section aria-labelledby="reconstruction">
+        <h2 id="reconstruction">Reconstruction</h2>
+        <DensityView
+          density={shown?.density ?? null}
+          width={GRID_COLUMNS}
+          summary={
+            shown
+              ? `Reconstructed density on a ${GRID_COLUMNS} × ${shown.cols / GRID_COLUMNS} voxel grid, A2 after ${shown.steps} steps at ${formatExposure(exposure)}.`
+              : 'Waiting for the reconstruction…'
+          }
+        />
+        <label className="exposure">
+          <span>Exposure</span>
+          <input
+            type="range"
+            min={MIN_EXPOSURE}
+            max={MAX_EXPOSURE}
+            step={EXPOSURE_STEP}
+            value={requested}
+            onChange={(event) => setRequested(Number(event.target.value))}
+          />
+          <output>{formatExposure(requested)}</output>
+        </label>
+        <p className="detail">
+          {requested === exposure
+            ? 'More exposure is more counts, and a sharper image. The operator and λ keep their content keys across a change; only the counts, the density and the scan are recomputed.'
+            : 'Recomputing at the new exposure…'}
+        </p>
+      </section>
 
       <section aria-labelledby="compute">
         <h2 id="compute">Compute</h2>
@@ -204,11 +280,11 @@ export function App() {
       <section aria-labelledby="status">
         <h2 id="status">Pipeline</h2>
         <p>
-          The stages below share one protocol. Those past <code>RECON</code>{' '}
+          The stages below share one protocol. Those past <code>SCAN</code>{' '}
           are not wired yet — the scaffold exists so the store, the renderer and
           the remaining statistics can be built against a fixed contract. The
           scan's <code>Z</code> field and amplitude map arrive as typed arrays
-          like the rest; nothing here draws them yet.
+          like the rest; the reconstruction above is the field this page draws.
         </p>
         <ol className="stages">
           {PIPELINE_STAGES.map((stage) => (
