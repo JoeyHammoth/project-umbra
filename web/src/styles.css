@@ -165,6 +165,28 @@ ol.stages li {
   text-align: right;
 }
 
+.window {
+  display: flex;
+  gap: 1rem;
+  max-width: 32rem;
+  margin-top: 0.6rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.window label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.window input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
 footer {
   margin-top: 3rem;
   color: var(--muted);

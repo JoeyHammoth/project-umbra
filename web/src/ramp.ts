@@ -87,7 +87,11 @@ export const SIGMA_LEGEND = legendOf(SIGMA_RAMP);
 export interface Window {
   lo: number;
   hi: number;
-  /** Whether values outside the window were clipped, which the legend states. */
+  /** Positive values strictly below the floor. */
+  below: number;
+  /** Positive values strictly above the ceiling. */
+  above: number;
+  /** Whether anything fell outside, which the legend states. */
   clipped: boolean;
 }
 
@@ -119,13 +123,13 @@ export function rangeOf(
   for (const value of field) {
     if (value > 0) values.push(value);
   }
-  if (values.length === 0) return { lo: 0, hi: 0, clipped: false };
+  if (values.length === 0) return { lo: 0, hi: 0, below: 0, above: 0, clipped: false };
   values.sort((a, b) => a - b);
   const lo = quantile(values, low);
   const hi = quantile(values, high);
-  return {
-    lo,
-    hi,
-    clipped: values[0]! < lo || values[values.length - 1]! > hi,
-  };
+  // The counts, not just a flag: "2–98%" says a window was applied, and these
+  // say how much of the field it moved out of view.
+  const below = values.filter((value) => value < lo).length;
+  const above = values.filter((value) => value > hi).length;
+  return { lo, hi, below, above, clipped: below > 0 || above > 0 };
 }

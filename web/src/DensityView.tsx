@@ -24,7 +24,16 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 
-import { DENSITY_LEGEND, SIGMA_LEGEND, Z_CEILING, rampAt, rangeOf, sigmaAt } from './ramp.ts';
+import {
+  DENSITY_LEGEND,
+  SIGMA_LEGEND,
+  WINDOW_HIGH,
+  WINDOW_LOW,
+  Z_CEILING,
+  rampAt,
+  rangeOf,
+  sigmaAt,
+} from './ramp.ts';
 
 export interface DensityViewProps {
   /** The field, one entry per voxel, in g cm⁻³. */
@@ -49,10 +58,12 @@ export interface DensityViewProps {
 export function paint(
   density: Float32Array,
   width: number,
+  low = WINDOW_LOW,
+  high = WINDOW_HIGH,
 ): { data: Uint8ClampedArray<ArrayBuffer>; height: number } {
   const height = Math.max(1, Math.ceil(density.length / width));
   const data = new Uint8ClampedArray(width * height * 4);
-  const { lo, hi } = rangeOf(density);
+  const { lo, hi } = rangeOf(density, low, high);
   const span = hi - lo;
   for (let index = 0; index < density.length; index += 1) {
     const value = density[index] ?? 0;
@@ -126,13 +137,18 @@ export function DensityView({
     density: number;
     z: number | null;
   } | null>(null);
+  // The window is a control, not a constant. 2–98% is the right default, but
+  // the only way to see what it clips is to move it: the sliders are the field's
+  // own percentiles, so 0–100% draws the outliers the default hides.
+  const [floor, setFloor] = useState(WINDOW_LOW);
+  const [ceiling, setCeiling] = useState(WINDOW_HIGH);
   const height = density ? Math.max(1, Math.ceil(density.length / width)) : 1;
-  const window = rangeOf(density ?? NOTHING);
+  const window = rangeOf(density ?? NOTHING, floor, ceiling);
 
   useEffect(() => {
     if (!density || density.length === 0) return;
-    draw(densityCanvas.current, paint(density, width), width);
-  }, [density, width]);
+    draw(densityCanvas.current, paint(density, width, floor, ceiling), width);
+  }, [density, width, floor, ceiling]);
 
   useEffect(() => {
     if (!z || z.length === 0) return;
@@ -180,8 +196,37 @@ export function DensityView({
           <span>{window.lo.toFixed(2)}</span>
           <span className="density-ramp" style={{ background: DENSITY_LEGEND }} />
           <span>
-            {window.hi.toFixed(2)} g cm⁻³{window.clipped ? ' · 2–98%' : ''}
+            {`${window.hi.toFixed(2)} g cm⁻³ · ${Math.round(floor * 100)}–${Math.round(
+              ceiling * 100,
+            )}%`}
+            {window.below + window.above > 0
+              ? ` · ${window.below + window.above} outside`
+              : ''}
           </span>
+        </div>
+        <div className="window">
+          <label>
+            <span>floor {Math.round(floor * 100)}%</span>
+            <input
+              type="range"
+              min={0}
+              max={49}
+              step={0.5}
+              value={floor * 100}
+              onChange={(event) => setFloor(Number(event.target.value) / 100)}
+            />
+          </label>
+          <label>
+            <span>ceiling {Math.round(ceiling * 100)}%</span>
+            <input
+              type="range"
+              min={51}
+              max={100}
+              step={0.5}
+              value={ceiling * 100}
+              onChange={(event) => setCeiling(Number(event.target.value) / 100)}
+            />
+          </label>
         </div>
         <figcaption>
           {summary}

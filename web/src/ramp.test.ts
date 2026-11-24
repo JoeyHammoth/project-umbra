@@ -28,7 +28,27 @@ test('air is outside the window rather than at its floor', () => {
 
 test('an empty field has an empty window instead of dividing by nothing', () => {
   const window = rangeOf(new Float32Array(16));
-  assert.deepEqual(window, { lo: 0, hi: 0, clipped: false });
+  assert.deepEqual(window, { lo: 0, hi: 0, below: 0, above: 0, clipped: false });
+});
+
+test('the window follows the percentiles it is given, so clipping can be inspected', () => {
+  const field = new Float32Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+  // The default hides both ends; asking for the whole positive range shows
+  // exactly what it was hiding, which is the point of the control.
+  const whole = rangeOf(field, 0, 1);
+  assert.equal(whole.lo, 1, 'air still stays out of the window');
+  assert.equal(whole.hi, 10);
+  assert.equal(whole.clipped, false);
+  assert.equal(whole.below, 0);
+  assert.equal(whole.above, 0);
+
+  const narrow = rangeOf(field, 0.4, 0.6);
+  assert.equal(narrow.lo, 5);
+  assert.equal(narrow.hi, 6);
+  assert.equal(narrow.below, 4, '1 to 4 are under the floor');
+  assert.equal(narrow.above, 4, '7 to 10 are over the ceiling');
+  assert.equal(narrow.clipped, true);
 });
 
 test('the density ramp never starts at black, which is how the browser check counts voxels', () => {
