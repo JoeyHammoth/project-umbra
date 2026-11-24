@@ -38,7 +38,15 @@ class FakeCore implements ComputeCore {
   buildSystem(systemKey: string, sceneJson: string) {
     this.throwIfFailing();
     this.calls.push(`build ${systemKey} ${sceneJson}`);
-    return { systemKey, rows: 4, cols: 9, nnz: 12 };
+    return {
+      systemKey,
+      rows: 4,
+      cols: 9,
+      nnz: 12,
+      // A pair, because that is what `Results.BUILD_SYSTEM` promises: the wasm
+      // getter's Uint32Array is flattened by the handler, not passed through.
+      grid: [3, 3] as [number, number],
+    };
   }
 
   sceneDensity(systemKey: string): Float32Array {
@@ -101,16 +109,27 @@ test('build system returns the operator shape and has nothing to transfer', () =
   const core = new FakeCore();
   const event = handleTask(core, request('BUILD_SYSTEM', { sceneJson: '{"id":"x"}' }));
 
-  const { result, transfer } = asResult<{ systemKey: string; rows: number; cols: number; nnz: number }>(
-    event,
-  );
-  assert.deepEqual(result, { systemKey: 'content-key', rows: 4, cols: 9, nnz: 12 });
+  const { result, transfer } = asResult<{
+    systemKey: string;
+    rows: number;
+    cols: number;
+    nnz: number;
+    grid: [number, number];
+  }>(event);
+  assert.deepEqual(result, {
+    systemKey: 'content-key',
+    rows: 4,
+    cols: 9,
+    nnz: 12,
+    grid: [3, 3],
+  });
   assert.equal(transfer, undefined, 'no bulk data, so no transfer list');
   assert.deepEqual(
     Object.keys(result).sort(),
-    ['cols', 'nnz', 'rows', 'systemKey'],
+    ['cols', 'grid', 'nnz', 'rows', 'systemKey'],
     'a plain object: a wasm class posts as {} because its fields are prototype getters',
   );
+  assert.ok(Array.isArray(result.grid), 'the axis pair is a plain array, not a typed one');
   assert.deepEqual(core.calls, ['build content-key {"id":"x"}']);
 });
 

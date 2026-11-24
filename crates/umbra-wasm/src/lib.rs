@@ -33,7 +33,7 @@ use wasm_bindgen::prelude::*;
 ///
 /// The TypeScript client compares this against its own expectation at startup,
 /// so a stale cached `.wasm` fails loudly instead of silently mismatching.
-pub const API_VERSION: &str = "0.3.0";
+pub const API_VERSION: &str = "0.4.0";
 
 /// Task id mixed into a `SIMULATE` stream id.
 ///
@@ -157,6 +157,14 @@ pub struct BuildSummary {
     pub cols: u32,
     /// Non-zero path lengths in the CSR operator.
     pub nnz: u32,
+    /// Voxels per axis of the grid the operator was rasterised on.
+    ///
+    /// `rows` and `cols` are the operator's shape — ray cells and voxels — which
+    /// says how many unknowns there are but not how the field is laid out. A
+    /// renderer needs the layout, and the alternative was re-parsing the scene
+    /// document in JavaScript, where it could disagree with the rasteriser that
+    /// actually built the operator.
+    pub grid: [u32; 2],
 }
 
 struct StoredSystem {
@@ -243,6 +251,7 @@ impl Core {
             rows: system.ray_count() as u32,
             cols: system.voxel_count() as u32,
             nnz: system.l.indices.len() as u32,
+            grid: scene.grid.n,
         };
         self.systems
             .insert(system_key.to_string(), StoredSystem { system, scene });
@@ -760,6 +769,7 @@ pub struct BuildOutcome {
     rows: u32,
     cols: u32,
     nnz: u32,
+    grid: Vec<u32>,
 }
 
 #[wasm_bindgen]
@@ -787,6 +797,12 @@ impl BuildOutcome {
     pub fn nnz(&self) -> u32 {
         self.nnz
     }
+
+    /// Voxels per axis, as a `Uint32Array` of length two.
+    #[wasm_bindgen(getter)]
+    pub fn grid(&self) -> Vec<u32> {
+        self.grid.clone()
+    }
 }
 
 impl From<BuildSummary> for BuildOutcome {
@@ -796,6 +812,7 @@ impl From<BuildSummary> for BuildOutcome {
             rows: summary.rows,
             cols: summary.cols,
             nnz: summary.nnz,
+            grid: summary.grid.to_vec(),
         }
     }
 }
@@ -1105,6 +1122,16 @@ mod tests {
         assert_eq!(summary.nnz as usize, direct.l.indices.len());
         assert_eq!(summary.rows, 24, "three detectors of eight bins");
         assert_eq!(summary.cols, 256);
+        assert_eq!(
+            summary.grid,
+            [16, 16],
+            "the layout, not just the voxel count: a renderer needs both"
+        );
+        assert_eq!(
+            summary.grid[0] * summary.grid[1],
+            summary.cols,
+            "the axes must multiply to the column count"
+        );
         assert_eq!(core.system_count(), 1);
 
         // Building the same key again is idempotent: a content key names one

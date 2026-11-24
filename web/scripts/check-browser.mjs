@@ -359,10 +359,14 @@ async function main() {
   }
 }
 
+// Exit once the line is flushed. A killed headless Chrome can leave a renderer
+// holding the stderr pipe it inherited, and waiting for that process to die is
+// how a one-shot check hangs after it already has its answer -- which reads as a
+// timeout in CI even though the round trip passed. The write callback runs after
+// the pipe has taken the bytes, so exiting there loses nothing.
 try {
   const text = await main();
-  console.log(`browser round trip: ${text}`);
+  process.stdout.write(`browser round trip: ${text}\n`, () => process.exit(0));
 } catch (error) {
-  console.error(`browser round trip FAILED: ${error.message}`);
-  process.exitCode = 1;
+  process.stderr.write(`browser round trip FAILED: ${error.message}\n`, () => process.exit(1));
 }
