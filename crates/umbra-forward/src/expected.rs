@@ -158,6 +158,7 @@ mod tests {
                 k_scale,
             }],
             grid: GridAny::Two(Grid2::new([voxels as u32, 1], [0.0, 0.0], 1.0)),
+            poses: Vec::new(),
         }
     }
 

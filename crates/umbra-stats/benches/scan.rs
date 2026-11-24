@@ -59,6 +59,9 @@ fn finish(l: Csr<f32>, grid: GridAny, rays: usize) -> (System, Vec<f32>, Vec<f32
     density[start..end].fill(1.0);
     let system = System {
         l,
+        // Geometry without an experiment: the bench writes its own operator, so
+        // there is no detector to carry a pose for.
+        poses: Vec::new(),
         rays: (0..rays)
             .map(|_| RayCell {
                 det: 0,

@@ -57,6 +57,7 @@ fn scene_2d(n: usize) -> (System, Vec<f32>, Vec<f32>, Vec<f32>) {
             })
             .collect(),
         grid: GridAny::Two(grid),
+        poses: Vec::new(),
     };
     let opacity = system.opacity(&density);
     let lambda0: Vec<f32> = opacity

@@ -618,6 +618,7 @@ mod tests {
             l: Csr::new(indptr, indices, data),
             rays,
             grid: GridAny::Two(Grid2::new([paths_cm.len() as u32, 1], [0.0, 0.0], 0.1)),
+            poses: Vec::new(),
         }
     }
 
@@ -646,6 +647,7 @@ mod tests {
                 })
                 .collect(),
             grid: GridAny::Two(Grid2::new([3, 1], [0.0, 0.0], 0.1)),
+            poses: Vec::new(),
         };
         let map = poisson_laplace(
             &problem(&system, &flux),
@@ -682,6 +684,7 @@ mod tests {
                 })
                 .collect(),
             grid: GridAny::Two(Grid2::new([4, 1], [0.0, 0.0], 0.1)),
+            poses: Vec::new(),
         };
         let rho = [2.65f32, 2.4, 2.9, 2.0];
         let mut prior = GraphCurvature::new(4);
@@ -863,6 +866,7 @@ mod tests {
                 k_scale: 1.0e4,
             }],
             grid: GridAny::Two(Grid2::new([2, 1], [0.0, 0.0], 0.1)),
+            poses: Vec::new(),
         };
         let map = poisson_laplace(
             &problem(&system, &flux),

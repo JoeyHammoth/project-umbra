@@ -772,6 +772,7 @@ mod tests {
                 })
                 .collect(),
             grid: GridAny::Two(grid),
+            poses: Vec::new(),
         };
         let opacity = system.opacity(&density);
         // Six-figure counts, so the data dominate the priors and a recovered

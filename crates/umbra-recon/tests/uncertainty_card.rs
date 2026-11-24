@@ -178,6 +178,9 @@ fn a_voxel_no_ray_touches_is_reported_unconstrained_on_its_card() {
             })
             .collect(),
         grid: umbra_core::GridAny::Two(Grid2::new([3, 1], [0.0, 0.0], 0.1)),
+        // No scene here: the fixture writes its own operator, so it has no poses
+        // to carry and `detector_pose` answers `None`.
+        poses: Vec::new(),
     };
     let flux = generate_default();
     let counts = [40.0f32, 40.0];

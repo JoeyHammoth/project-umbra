@@ -109,6 +109,14 @@ pub fn build_system_2d(scene: &Scene2D) -> System {
         l,
         rays,
         grid: GridAny::Two(scene.grid.clone()),
+        // One pose per detector, in scene order, which is what `RayCell::det`
+        // indexes. Assembly order already has to be deterministic (spec §5.3),
+        // so this is the same ordering guarantee applied to the geometry.
+        poses: scene
+            .detectors
+            .iter()
+            .map(|detector| detector.pose)
+            .collect(),
     }
 }
 
@@ -228,6 +236,31 @@ mod tests {
             opacity[0],
             analytic * 100.0
         );
+    }
+
+    #[test]
+    fn the_system_carries_the_pose_every_ray_names() {
+        let scene = Scene2D::new(
+            grid(),
+            vec![detector(0.25, -9.0, 2), detector(-9.0, 0.25, 3)],
+        );
+        let system = build_system_2d(&scene);
+        assert_eq!(system.poses.len(), scene.detectors.len());
+        assert_eq!(system.ray_count(), 5, "two bins plus three");
+        for (index, ray) in system.rays.iter().enumerate() {
+            let pose = system
+                .detector_pose(ray.det)
+                .unwrap_or_else(|| panic!("ray {index} names detector {} with no pose", ray.det));
+            assert_eq!(
+                pose.position,
+                scene.detectors[usize::from(ray.det)].pose.position,
+                "ray {index} must sit at the detector it belongs to"
+            );
+        }
+        // `RayCell::det` is a u16 while a system can hold no poses at all: the
+        // hand-written fixtures rely on that, and a caller has to be able to ask
+        // without getting a panic back.
+        assert!(system.detector_pose(9).is_none());
     }
 
     #[test]

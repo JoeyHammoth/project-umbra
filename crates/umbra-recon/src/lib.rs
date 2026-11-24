@@ -355,6 +355,7 @@ mod tests {
                 k_scale: 1.0e4,
             }],
             grid: GridAny::Two(Grid2::new([1, 1], [0.0, 0.0], 1.0)),
+            poses: Vec::new(),
         };
         let flux = generate_default();
         let counts = [1.0f32];
