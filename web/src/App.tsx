@@ -285,9 +285,9 @@ export function App() {
         <p>
           The stages below share one protocol. Those past <code>SCAN</code>{' '}
           are not wired yet — the scaffold exists so the store, the renderer and
-          the remaining statistics can be built against a fixed contract. The
-          scan's <code>Z</code> field and amplitude map arrive as typed arrays
-          like the rest; the reconstruction above is the field this page draws.
+          the remaining statistics can be built against a fixed contract. Both
+          fields above are drawn from typed arrays the worker transferred: the
+          reconstruction, and the scan's <code>Z</code> beside it.
         </p>
         <ol className="stages">
           {PIPELINE_STAGES.map((stage) => (
