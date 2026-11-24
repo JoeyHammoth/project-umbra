@@ -270,6 +270,32 @@ arithmetic — that `p(5σ)` is `1 − e^{−⟨N⟩}` from the upcrossing count
 0.86 rather than a clamp at one; and that the calibration is unchanged when its
 toys are merged in reverse order.
 
+The law was only ever checked on a plane until the campaign learned a dimension
+knob, and a plane is a weak test of it: there an excursion is a strip the ray
+runs along, while in a volume it is a sheet the ray cuts through, and the `χ`
+closure carries one more term. `UMBRA_LEE_DIM=3` runs the same bench on `40³`
+voxels (`1600` rays, one per column), and
+[`docs/calibration/lee-3d-40-2e4.md`](calibration/lee-3d-40-2e4.md) records
+20 000 toys on it: `χ̄(u₀) = 19.60 ± 0.05`, and the model tracks the toys at
+1.02×, 1.14×, 1.15×, 1.04× and 1.02× from 3σ to 5σ. The 2 000-toy run before it
+read 1.67× at 4.5σ and 0.61× at 5σ on 21 and 5 exceedances — what a tail looks
+like when the sample, not the model, is the uncertainty. The volume divides the
+search space differently, so its *rates* are not comparable with the plane's; the
+ratio is what the law is being checked on. `euler_counts_a_tunnel_as_zero` pins
+the `− C` term on a block with a column removed (a count without it reads 1 and
+calls a tunnel a ball), and `the_extrapolation_holds_on_a_volume` runs the whole
+chain — Poisson toys, scan, `χ`, extrapolation — on a `16³` scene.
+
+The campaign now acts on its own result rather than waiting for a reader. Its
+report ends with a machine-readable verdict line, `tools/lee-verdict.sh` reads
+it, and the campaign job dispatches the `10⁵` confirmation when a `10⁴` run
+reports UNDECIDED (a confirmation never dispatches another, and the weekly
+scheduled run only reports) and opens an issue when a run with at least as many
+toys in the same dimension changes
+[`docs/calibration/recorded-verdict.txt`](calibration/recorded-verdict.txt). The
+comparison is gated on toys and dimension because a smaller sample cannot
+overturn a larger decision and a volume is a different search space.
+
 `cargo bench -p umbra-stats --bench lee` runs the campaign itself. On the 200²
 scene with 200 toys, the anchor is no longer a factor-of-three decision:
 
