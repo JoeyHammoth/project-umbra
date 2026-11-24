@@ -89,6 +89,14 @@ ol.stages li {
   font-size: 0.92rem;
 }
 
+/* The reconstruction and the scan side by side: the picture says where the mass
+   is, the significance says whether to believe a hole in it. */
+.views {
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .density {
   margin: 0;
 }
@@ -173,6 +181,10 @@ code {
   ol.stages li {
     grid-template-columns: 1fr;
     gap: 0.15rem;
+  }
+
+  .views {
+    grid-template-columns: 1fr;
   }
 
   .exposure {

@@ -1,5 +1,5 @@
 /**
- * The reconstruction, drawn.
+ * The reconstruction and the scan, drawn.
  *
  * A 32 × 32 density field printed as numbers is a debug readout; the same field
  * as an image is the thing the app is about. The canvas is sized to the grid and
@@ -7,24 +7,32 @@
  * a regression that swaps the row order or loses the field looks wrong instead
  * of merely looking different.
  *
- * Air is black because the field really is zero there, so a blank square with no
- * structure is a visible failure rather than a plausible dark image. Everything
- * above zero goes through the heatmap below: monotone in luminance, so brightness
- * still tracks density, but spread across hue, because a 20-step reconstruction
- * spans more than a decade and a single hue rounds every value below a tenth of
- * the peak to the same near-black.
+ * The two panels answer different questions and are deliberately not on one
+ * colour scale. Density is a positive quantity, so air is black and the ramp runs
+ * from indigo to pale yellow. `Z` is a significance: it is fixed at 0–5σ rather
+ * than normalised to its own peak, because a ramp that stretched a null field to
+ * full brightness would make noise look like a detection — and the density panel
+ * already shows where the mass is.
  */
 
 import { useEffect, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 
 export interface DensityViewProps {
   /** The field, one entry per voxel, in g cm⁻³. */
   density: Float32Array | null;
+  /** The scan's `Z` at every voxel; null before a scan has landed. */
+  z?: Float32Array | null;
   /** Voxels per row; the height follows from the field's length. */
   width: number;
   /** Described for assistive technology, which cannot see the canvas. */
   summary: string;
+  /** The same for the `Z` panel, whose units are sigma rather than g cm⁻³. */
+  scanSummary?: string;
 }
+
+/** Full scale of the `Z` panel, in sigma. */
+export const Z_CEILING = 5;
 
 /** The largest value in the field, which sets the top of the ramp. */
 export function peakOf(density: Float32Array): number {
@@ -38,7 +46,8 @@ export function peakOf(density: Float32Array): number {
 type Stop = readonly [t: number, r: number, g: number, b: number];
 
 /**
- * A five-stop heatmap: indigo → purple → crimson → orange → pale yellow.
+ * A five-stop heatmap for density: indigo → purple → crimson → orange → pale
+ * yellow.
  *
  * The first stop is deliberately not black. Air is painted black below, and a
  * ramp starting at zero would make the faintest real density indistinguishable
@@ -53,13 +62,26 @@ const RAMP: readonly Stop[] = [
   [1, 252, 255, 164],
 ];
 
-/** Colour at fraction `t` of the peak, linearly interpolated between stops. */
-export function rampAt(t: number): [number, number, number] {
+/**
+ * A four-stop map for significance: near-black → deep blue → cyan → white.
+ *
+ * Hue is not doing arithmetic here; the panel is a lookup of `Z` against a fixed
+ * ceiling, so the eye reads "how bright" and the legend supplies the number.
+ */
+const SIGMA_RAMP: readonly Stop[] = [
+  [0, 12, 18, 38],
+  [0.35, 33, 78, 138],
+  [0.65, 66, 168, 190],
+  [1, 236, 246, 240],
+];
+
+/** Colour at fraction `t` of `ramp`, linearly interpolated between stops. */
+function colourAt(ramp: readonly Stop[], t: number): [number, number, number] {
   const x = t < 0 ? 0 : t > 1 ? 1 : t;
-  for (let stop = 1; stop < RAMP.length; stop += 1) {
-    const [t1, r1, g1, b1] = RAMP[stop]!;
+  for (let stop = 1; stop < ramp.length; stop += 1) {
+    const [t1, r1, g1, b1] = ramp[stop]!;
     if (x > t1) continue;
-    const [t0, r0, g0, b0] = RAMP[stop - 1]!;
+    const [t0, r0, g0, b0] = ramp[stop - 1]!;
     const f = t1 === t0 ? 0 : (x - t0) / (t1 - t0);
     return [
       Math.round(r0 + (r1 - r0) * f),
@@ -67,17 +89,31 @@ export function rampAt(t: number): [number, number, number] {
       Math.round(b0 + (b1 - b0) * f),
     ];
   }
-  const [, r, g, b] = RAMP[RAMP.length - 1]!;
+  const [, r, g, b] = ramp[ramp.length - 1]!;
   return [r, g, b];
 }
 
+/** Colour at fraction `t` of the density peak. */
+export function rampAt(t: number): [number, number, number] {
+  return colourAt(RAMP, t);
+}
+
+/** The ramp as a CSS gradient, so the legend and the pixels cannot drift apart. */
+function legendOf(ramp: readonly Stop[]): string {
+  return `linear-gradient(90deg, ${ramp
+    .map(([t, r, g, b]) => `rgb(${r} ${g} ${b}) ${Math.round(t * 100)}%`)
+    .join(', ')})`;
+}
+
+const LEGEND = legendOf(RAMP);
+const SIGMA_LEGEND = legendOf(SIGMA_RAMP);
+
 /**
- * Fills an `ImageData` with the field, normalised to its own peak.
+ * Fills an `ImageData` with the density, normalised to its own peak.
  *
- * Returns the number of pixels above zero so a caller — the browser check —
- * can tell a drawn field from a black rectangle. Normalising to the peak rather
- * than to a fixed density is what keeps an early reconstruction visible: after
- * one step the whole field is small, and a fixed scale would show nothing.
+ * Returns the height so the caller can size the canvas. Normalising to the peak
+ * rather than to a fixed density is what keeps an early reconstruction visible:
+ * after one step the whole field is small, and a fixed scale would show nothing.
  */
 export function paint(
   density: Float32Array,
@@ -101,66 +137,153 @@ export function paint(
   return { data, height };
 }
 
-/** The ramp as a CSS gradient, so the legend and the pixels cannot drift apart. */
-const LEGEND = `linear-gradient(90deg, ${RAMP.map(
-  ([t, r, g, b]) => `rgb(${r} ${g} ${b}) ${Math.round(t * 100)}%`,
-).join(', ')})`;
+/**
+ * Fills an `ImageData` with `Z`, against the fixed ceiling.
+ *
+ * Nothing is normalised: a null field must stay dark, and a `Z` of 1.66 must look
+ * like 1.66 of 5 rather than like the best thing the scan found.
+ */
+export function paintScan(
+  z: Float32Array,
+  width: number,
+  ceiling = Z_CEILING,
+): { data: Uint8ClampedArray<ArrayBuffer>; height: number } {
+  const height = Math.max(1, Math.ceil(z.length / width));
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let index = 0; index < z.length; index += 1) {
+    const value = Math.max(0, z[index] ?? 0) / ceiling;
+    const [r, g, b] = colourAt(SIGMA_RAMP, value);
+    data[index * 4] = r;
+    data[index * 4 + 1] = g;
+    data[index * 4 + 2] = b;
+    data[index * 4 + 3] = 255;
+  }
+  return { data, height };
+}
 
-export function DensityView({ density, width, summary }: DensityViewProps) {
-  const canvas = useRef<HTMLCanvasElement | null>(null);
-  const [hover, setHover] = useState<{ x: number; y: number; value: number } | null>(null);
+/** Draws `painted` into `canvas`, sizing it to the field. */
+function draw(
+  canvas: HTMLCanvasElement | null,
+  painted: { data: Uint8ClampedArray<ArrayBuffer>; height: number },
+  width: number,
+): void {
+  if (!canvas) return;
+  const { data, height } = painted;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  // A canvas without a 2D context is a browser that cannot draw at all; the
+  // figcaption still carries the numbers, so this is not fatal.
+  if (!context) return;
+  context.putImageData(new ImageData(data, width, height), 0, 0);
+}
+
+export function DensityView({
+  density,
+  z = null,
+  width,
+  summary,
+  scanSummary,
+}: DensityViewProps) {
+  const densityCanvas = useRef<HTMLCanvasElement | null>(null);
+  const scanCanvas = useRef<HTMLCanvasElement | null>(null);
+  const [hover, setHover] = useState<{
+    x: number;
+    y: number;
+    density: number;
+    z: number | null;
+  } | null>(null);
   const height = density ? Math.max(1, Math.ceil(density.length / width)) : 1;
 
   useEffect(() => {
-    const element = canvas.current;
-    if (!element || !density || density.length === 0) return;
-    const { data, height } = paint(density, width);
-    element.width = width;
-    element.height = height;
-    const context = element.getContext('2d');
-    // A canvas without a 2D context is a browser that cannot draw at all; the
-    // figcaption still carries the numbers, so this is not fatal.
-    if (!context) return;
-    context.putImageData(new ImageData(data, width, height), 0, 0);
+    if (!density || density.length === 0) return;
+    draw(densityCanvas.current, paint(density, width), width);
   }, [density, width]);
 
+  useEffect(() => {
+    if (!z || z.length === 0) return;
+    draw(scanCanvas.current, paintScan(z, width), width);
+  }, [z, width]);
+
+  /**
+   * Voxel under the pointer, shared by both panels so the readout agrees with
+   * whichever image is hovered.
+   *
+   * The canvas is scaled by CSS, so the pointer has to come back through the
+   * element's own box: reading `offsetX` would report CSS pixels, and a voxel
+   * would be whichever one happened to sit under them.
+   */
+  const track = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (!density) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = Math.floor(((event.clientX - rect.left) / rect.width) * width);
+    const y = Math.floor(((event.clientY - rect.top) / rect.height) * height);
+    if (x < 0 || y < 0 || x >= width || y >= height) {
+      setHover(null);
+      return;
+    }
+    const index = y * width + x;
+    setHover({
+      x,
+      y,
+      density: density[index] ?? 0,
+      z: z ? (z[index] ?? 0) : null,
+    });
+  };
+
   return (
-    <figure className="density">
-      <canvas
-        ref={canvas}
-        data-testid="density"
-        role="img"
-        aria-label={summary}
-        onPointerMove={(event) => {
-          if (!density) return;
-          // The canvas is scaled by CSS, so the pointer has to come back through
-          // the element's own box: reading `offsetX` would report CSS pixels and
-          // a hovered voxel would be whichever one happened to sit under them.
-          const rect = event.currentTarget.getBoundingClientRect();
-          const x = Math.floor(((event.clientX - rect.left) / rect.width) * width);
-          const y = Math.floor(((event.clientY - rect.top) / rect.height) * height);
-          if (x < 0 || y < 0 || x >= width || y >= height) {
-            setHover(null);
-            return;
-          }
-          setHover({ x, y, value: density[y * width + x] ?? 0 });
-        }}
-        onPointerLeave={() => setHover(null)}
-      />
-      <div className="density-legend" aria-hidden="true">
-        <span>0</span>
-        <span className="density-ramp" style={{ background: LEGEND }} />
-        <span>{peakOf(density ?? new Float32Array()).toFixed(2)} g cm⁻³</span>
-      </div>
-      <figcaption>
-        {summary}
-        {hover ? (
-          <span className="density-readout">
-            {' '}
-            · voxel ({hover.x}, {hover.y}) ρ = {hover.value.toFixed(3)} g cm⁻³
-          </span>
-        ) : null}
-      </figcaption>
-    </figure>
+    <div className="views">
+      <figure className="density">
+        <canvas
+          ref={densityCanvas}
+          data-testid="density"
+          role="img"
+          aria-label={summary}
+          onPointerMove={track}
+          onPointerLeave={() => setHover(null)}
+        />
+        <div className="density-legend" aria-hidden="true">
+          <span>0</span>
+          <span className="density-ramp" style={{ background: LEGEND }} />
+          <span>{peakOf(density ?? new Float32Array()).toFixed(2)} g cm⁻³</span>
+        </div>
+        <figcaption>
+          {summary}
+          {hover ? (
+            <span className="density-readout">
+              {' '}
+              · voxel ({hover.x}, {hover.y}) ρ = {hover.density.toFixed(3)} g cm⁻³
+            </span>
+          ) : null}
+        </figcaption>
+      </figure>
+
+      {z ? (
+        <figure className="density">
+          <canvas
+            ref={scanCanvas}
+            data-testid="scan"
+            role="img"
+            aria-label={scanSummary ?? `Z score, ${Z_CEILING} sigma full scale`}
+            onPointerMove={track}
+            onPointerLeave={() => setHover(null)}
+          />
+          <div className="density-legend" aria-hidden="true">
+            <span>0</span>
+            <span className="density-ramp" style={{ background: SIGMA_LEGEND }} />
+            <span>{Z_CEILING}σ</span>
+          </div>
+          <figcaption>
+            {scanSummary ?? `Z score, ${Z_CEILING}σ full scale.`}
+            {hover?.z !== null && hover !== null ? (
+              <span className="density-readout">
+                {' '}
+                · voxel ({hover.x}, {hover.y}) Z = {hover.z.toFixed(2)}
+              </span>
+            ) : null}
+          </figcaption>
+        </figure>
+      ) : null}
+    </div>
   );
 }
