@@ -951,4 +951,175 @@ mod tests {
             "the seed is part of the key"
         );
     }
+
+    /// A scene with a disc of density removed at `centre`, and counts drawn from
+    /// the `H1` that removal implies.
+    ///
+    /// The counts are Poisson draws rather than the noiseless mean, because the
+    /// question is whether the *scan* recovers the void from data, not whether
+    /// the template correlates with itself.
+    fn void_scene(
+        n: usize,
+        centre: (u32, u32),
+        radius: f32,
+        depth: f32,
+        attenuation: f32,
+        seed: u64,
+    ) -> (System, Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>) {
+        // Two orthogonal views, hand-built. A single parallel view cannot
+        // localise along its own ray direction: the first version of this test
+        // used one and measured a peak strung the length of the void's row,
+        // identical at every x. That is the geometry being blind, not the scan
+        // failing, and angular diversity is what makes "where" a question with
+        // an answer.
+        //
+        // The signal also has to beat the `sqrt(lambda)` noise of the draws
+        // below. At `Λ = 1000` it does not -- a 40% void moves lambda by a
+        // percent -- so the attenuation length here is short enough to make the
+        // same void a real object. That is a property of the scene, not of the
+        // statistic under test.
+        let grid = Grid2::new([n as u32, n as u32], [0.0, 0.0], 1.0);
+        let mut indptr = vec![0u32];
+        let mut indices = Vec::new();
+        let mut data = Vec::new();
+        for row in 0..n {
+            for column in 0..n {
+                indices.push((row * n + column) as u32);
+                data.push(1.0f32);
+            }
+            indptr.push(indices.len() as u32);
+        }
+        for column in 0..n {
+            for row in 0..n {
+                indices.push((row * n + column) as u32);
+                data.push(1.0f32);
+            }
+            indptr.push(indices.len() as u32);
+        }
+        // Before the grid moves into the system, which owns it.
+        let cells = grid.cell_count();
+        let system = System {
+            l: Csr::new(indptr, indices, data),
+            rays: (0..2 * n)
+                .map(|_| RayCell {
+                    det: 0,
+                    zen: 0.0,
+                    az: 0.0,
+                    k_scale: 1.0,
+                })
+                .collect(),
+            grid: GridAny::Two(grid),
+            poses: Vec::new(),
+        };
+        let density0 = vec![2.65f32; cells];
+        let opacity0 = system.opacity(&density0);
+        let lambda0: Vec<f32> = opacity0
+            .iter()
+            .map(|&x| 1.0e3 * (-x / attenuation).exp())
+            .collect();
+        let dlambda_dx: Vec<f32> = lambda0.iter().map(|&l| -l / attenuation).collect();
+        let mut density1 = density0.clone();
+        let (cx, cy) = (centre.0 as f32, centre.1 as f32);
+        for j in 0..n {
+            for i in 0..n {
+                let (dx, dy) = (i as f32 - cx, j as f32 - cy);
+                if dx * dx + dy * dy <= radius * radius {
+                    density1[j * n + i] = density0[j * n + i] * (1.0 - depth);
+                }
+            }
+        }
+        let opacity1 = system.opacity(&density1);
+        let lambda1: Vec<f32> = opacity1
+            .iter()
+            .map(|&x| 1.0e3 * (-x / attenuation).exp())
+            .collect();
+        let mut rng = Rng::new(seed);
+        let counts: Vec<f32> = lambda1
+            .iter()
+            .map(|&lambda| rng.poisson(f64::from(lambda)) as f32)
+            .collect();
+        (system, density0, lambda0, counts, dlambda_dx)
+    }
+
+    #[test]
+    fn a_planted_void_is_found_where_it_was_placed() {
+        let n = 48;
+        let centre = (24u32, 24u32);
+        let radius = 4.5;
+        let (system, density, lambda0, counts, dlambda_dx) =
+            void_scene(n, centre, radius, 1.0, 50.0, 0x5ca1_ab1e);
+        let cfg = ScanConfig {
+            scales_voxels: vec![1.0, 2.0, 3.0],
+            top_k: 5,
+            ..ScanConfig::default()
+        };
+        let problem = ScanProblem {
+            system: &system,
+            counts: &counts,
+            lambda0: &lambda0,
+            dlambda_dx: &dlambda_dx,
+            density: &density,
+            attenuation_gcm2: 1.0e3,
+        };
+        let peak = scan(&problem, &cfg)
+            .peak
+            .expect("a 40% void on a 10³-count scene is not marginal");
+        let (px, py) = (peak.voxel as u32 % n as u32, peak.voxel as u32 / n as u32);
+        let (dx, dy) = (
+            f64::from(px) - f64::from(centre.0),
+            f64::from(py) - f64::from(centre.1),
+        );
+        let offset = (dx * dx + dy * dy).sqrt();
+        // The tolerance is the template's own radius, not a voxel count picked
+        // after seeing the answer: the score is flat over the disc's plateau, so
+        // any point inside the void it was given is an equally good centre, and
+        // a matched filter cannot localise finer than the template it matched.
+        assert!(
+            offset <= f64::from(radius),
+            "the peak landed at ({px}, {py}), {offset:.1} voxels from the planted ({}, {}) -- \
+             outside the radius-{radius} void it was given",
+            centre.0,
+            centre.1
+        );
+        assert!(
+            peak.z > 6.0,
+            "a full void across fourteen rays should not be marginal: Z = {}",
+            peak.z
+        );
+        assert!(
+            peak.alpha_hat > 0.5,
+            "the fitted depth {} should be a real fraction of the planted 1.0",
+            peak.alpha_hat
+        );
+
+        // And the correction must not erase it. Three hundred toys is far too
+        // few to *measure* a 3σ rate -- that is what M3's campaign box is still
+        // waiting on -- but it is enough to check that the look-elsewhere penalty
+        // on a real void of this size stays orders of magnitude below the
+        // nominal 1.35e-3, rather than swallowing the detection.
+        let lee = LeeConfig { u0: 2.0, dim: 2 };
+        let calibration = lee_calibrate_with(&problem, &cfg, &lee, 300, 11, 2);
+        let global_p = calibration.extrapolated_global_p(peak.z);
+        assert!(
+            f64::from(global_p) < 1.35e-3,
+            "global p {global_p:.2e} at Z = {:.2} should still clear 3 sigma after a \
+             300-toy correction",
+            peak.z
+        );
+        // The same correction on a null that never sees the void has to stay
+        // under it: an extrapolation that returned a small `p` for everything
+        // would pass the test above and mean nothing.
+        let null_q99 = calibration.quantile(0.99);
+        assert!(
+            null_q99 < peak.z,
+            "the null's 99th percentile ({null_q99:.2}) should stay below a real void's \
+             Z ({:.2})",
+            peak.z
+        );
+        println!(
+            "planted ({}, {}) radius {radius}: peak ({px}, {py}), off {offset:.2} vox, Z {:.2}, \
+             depth {:.2}; 99th null percentile {null_q99:.2}; global p {global_p:.2e}",
+            centre.0, centre.1, peak.z, peak.alpha_hat
+        );
+    }
 }
