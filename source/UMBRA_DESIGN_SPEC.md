@@ -1093,7 +1093,7 @@ Flakes are not retried into silence. A flaky test is quarantined with an issue, 
 | M0 | Foundation | workspace, gates, docs, board, wiki | builds green on `main`; every crate exists with its types | **done** |
 | M1 | Physics core and forward model | tables, 2-D DDA, L0/L1 with exact gradients, Poisson simulator | traversal matches analytic chords; MC agrees with `λ` by χ² | **done** |
 | M2 | Reconstruction portfolio | A1–A4 on identical data, Fisher error bars | each solver has a convergence test, benchmark and a result on the default scene | **done** |
-| M3 | Detection and calibration | A6 scan, LRT refinement, Asimov, LEE, nuisances, A8, SBC | H0 false-positive rate at 3σ within ±20% over 10⁴ datasets | |
+| M3 | Detection and calibration | A6 scan, LRT refinement, Asimov, LEE, nuisances, A8, SBC | H0 false-positive rate at 3σ within ±20% over 10⁴ datasets | **in progress** — 3σ rate 44% low at 10⁵ toys (FAIL) |
 | M4 | Inference, design, visibility | A7 posterior + evidence, A9 placement, A10 PSF and roses | intervals cover truth; greedy beats manual placement | |
 | M5 | Web experience | `ComputeBus`, workers, Observatory, Detect/Design/Characterise, URL codec, PWA | budgets met; a shared URL reproduces scene and counts exactly | |
 | M6 | Hardening and release | a11y, size and benchmark gates, calibration report, Pages deploy | published site inside every §1.5 budget at £0/month | |
