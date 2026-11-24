@@ -113,6 +113,29 @@ ol.stages li {
   font-size: 0.85rem;
 }
 
+.density-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.7rem;
+  max-width: 32rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.density-ramp {
+  flex: 1;
+  height: 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+}
+
+.density-readout {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
 .exposure {
   display: flex;
   align-items: center;

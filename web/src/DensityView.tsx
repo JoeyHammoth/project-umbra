@@ -15,7 +15,7 @@
  * the peak to the same near-black.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export interface DensityViewProps {
   /** The field, one entry per voxel, in g cm⁻³. */
@@ -101,8 +101,15 @@ export function paint(
   return { data, height };
 }
 
+/** The ramp as a CSS gradient, so the legend and the pixels cannot drift apart. */
+const LEGEND = `linear-gradient(90deg, ${RAMP.map(
+  ([t, r, g, b]) => `rgb(${r} ${g} ${b}) ${Math.round(t * 100)}%`,
+).join(', ')})`;
+
 export function DensityView({ density, width, summary }: DensityViewProps) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
+  const [hover, setHover] = useState<{ x: number; y: number; value: number } | null>(null);
+  const height = density ? Math.max(1, Math.ceil(density.length / width)) : 1;
 
   useEffect(() => {
     const element = canvas.current;
@@ -119,8 +126,41 @@ export function DensityView({ density, width, summary }: DensityViewProps) {
 
   return (
     <figure className="density">
-      <canvas ref={canvas} data-testid="density" role="img" aria-label={summary} />
-      <figcaption>{summary}</figcaption>
+      <canvas
+        ref={canvas}
+        data-testid="density"
+        role="img"
+        aria-label={summary}
+        onPointerMove={(event) => {
+          if (!density) return;
+          // The canvas is scaled by CSS, so the pointer has to come back through
+          // the element's own box: reading `offsetX` would report CSS pixels and
+          // a hovered voxel would be whichever one happened to sit under them.
+          const rect = event.currentTarget.getBoundingClientRect();
+          const x = Math.floor(((event.clientX - rect.left) / rect.width) * width);
+          const y = Math.floor(((event.clientY - rect.top) / rect.height) * height);
+          if (x < 0 || y < 0 || x >= width || y >= height) {
+            setHover(null);
+            return;
+          }
+          setHover({ x, y, value: density[y * width + x] ?? 0 });
+        }}
+        onPointerLeave={() => setHover(null)}
+      />
+      <div className="density-legend" aria-hidden="true">
+        <span>0</span>
+        <span className="density-ramp" style={{ background: LEGEND }} />
+        <span>{peakOf(density ?? new Float32Array()).toFixed(2)} g cm⁻³</span>
+      </div>
+      <figcaption>
+        {summary}
+        {hover ? (
+          <span className="density-readout">
+            {' '}
+            · voxel ({hover.x}, {hover.y}) ρ = {hover.value.toFixed(3)} g cm⁻³
+          </span>
+        ) : null}
+      </figcaption>
     </figure>
   );
 }
