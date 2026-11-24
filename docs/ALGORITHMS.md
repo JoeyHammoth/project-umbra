@@ -338,6 +338,18 @@ exceedances in the campaign and the model is 10% under them, so a `5σ` global
 `p` here is a model informed by a measurement rather than a measurement. The
 campaign runs weekly as a CI artifact for that reason.
 
+A second 10⁵ campaign re-ran the whole thing on a fresh seed after the fix
+([`docs/calibration/lee-2d-1e5-fixed.md`](calibration/lee-2d-1e5-fixed.md), seed
+`0x51dec0de`, 4598.2 s on 4 CI cores, `χ̄ = 8.120 ± 0.010`), so the table above is
+not the sample that diagnosed the fault. It reads 1.01×, 1.00×, 0.95×, 0.95× and
+1.04× from 3σ to 5σ, with the model's crossing at 4.87σ against the toys' 4.85σ.
+At that threshold 128 of 100 000 toys cleared it — rate 1.280e-3, 5% below
+nominal, Wilson 95% [1.077e-3, 1.522e-3] against the ±20% band [1.080e-3,
+1.620e-3]. The criterion's box stays unchecked, and the reason is now the
+interval's floor missing by 0.3%: three times the toys would halve the
+half-width again and decide it. That is a sample-size miss, not a modelling one,
+which is the difference the previous FAIL did not have.
+
 What no unit test can pin is the spec's calibration target itself — the global
 rate at the model's `3σ` threshold, with the Wilson interval its exceedances
 imply. That is the campaign's verdict, not the suite's, and #15 tracks it.
