@@ -30,6 +30,8 @@ class FakeCore implements ComputeCore {
   lambda = new Float32Array([1.5, 2.5, 3.5]);
   counts = new Uint32Array([7, 8, 9]);
   density = new Float32Array([2.65, 2.65]);
+  zMap = new Float32Array([0.5, 4.25]);
+  alphaMap = new Float32Array([0.1, 0.31]);
   reconObjective: number | undefined = -123.5;
   failure: unknown = null;
 
@@ -73,6 +75,21 @@ class FakeCore implements ComputeCore {
     const params = paramNames.map((name, index) => `${name}=${paramValues[index]}`).join(',');
     this.calls.push(`recon ${countsKey} ${solver} ${params} ${iterations}`);
     return { density: this.density, iterations, objective: this.reconObjective };
+  }
+
+  scan(countsKey: string, scalesVoxels: number[], profileNuisances: boolean) {
+    this.throwIfFailing();
+    this.calls.push(`scan ${countsKey} ${scalesVoxels.join(',')} ${profileNuisances}`);
+    return {
+      z: this.zMap,
+      alphaHat: this.alphaMap,
+      maxZ: 4.25,
+      voxel: 190,
+      peakAlpha: 0.31,
+      peakP: 1.07e-5,
+      setupMs: 1.5,
+      correlateMs: 2.5,
+    };
   }
 
   private throwIfFailing() {
@@ -211,16 +228,49 @@ test('a solver with no objective reports null rather than a missing field', () =
   assert.equal(result.objective, null);
 });
 
+test('scan transfers the field and the amplitude map, and reports the peak', () => {
+  const core = new FakeCore();
+  const event = handleTask(
+    core,
+    request('SCAN', { countsKey: 'counts-key', scalesVoxels: [1, 2], profileNuisances: false }),
+  );
+
+  const { result, transfer } = asResult<{
+    z: Float32Array;
+    alphaHat: Float32Array;
+    maxZ: number;
+    voxel: number;
+    peakAlpha: number;
+    peakP: number;
+    setupMs: number;
+    correlateMs: number;
+  }>(event);
+  assert.equal(result.z, core.zMap, 'the field is handed over, not rebuilt');
+  assert.equal(result.alphaHat, core.alphaMap);
+  assert.deepEqual(
+    transfer,
+    [core.zMap.buffer, core.alphaMap.buffer],
+    'both fields move, and the list names their own buffers',
+  );
+  assert.equal(result.maxZ, 4.25);
+  assert.equal(result.voxel, 190);
+  assert.equal(result.peakAlpha, 0.31);
+  assert.equal(result.peakP, 1.07e-5);
+  assert.equal(result.setupMs, 1.5);
+  assert.equal(result.correlateMs, 2.5);
+  assert.deepEqual(core.calls, ['scan counts-key 1,2 false']);
+});
+
 test('a stage still without an entry point is an error event, not a thrown exception', () => {
   const core = new FakeCore();
   const event = handleTask(
     core,
-    request('SCAN', { countsKey: 'counts', scalesVoxels: [1, 2], profileNuisances: false }),
+    request('LEE_CALIB', { scanKey: 'scan', toys: 10, u0: 3 }),
   );
 
   const { code, message } = asError(event);
   assert.equal(code, 'unimplemented');
-  assert.match(message, /SCAN/);
+  assert.match(message, /LEE_CALIB/);
   assert.deepEqual(core.calls, [], 'the core is never called');
 });
 

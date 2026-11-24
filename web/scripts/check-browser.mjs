@@ -47,12 +47,19 @@ const EXPECTED = {
   events: 50074,
   density: 1024,
   steps: 20,
-  records: 4,
+  // The scan holds the scene itself as H0, and the counts were drawn from it, so
+  // the honest result is no detection. Pinning that null is stronger than
+  // pinning a discovery: a scan that started reporting 20σ on its own data would
+  // fail here, and so would one that silently returned zeros.
+  peakZ: 1.66,
+  voxel: 529,
+  peakAlpha: 1.0,
+  records: 5,
 };
 
 /** The status line, with every number captured so it can be compared. */
 const STATUS =
-  /^Assembled (\d+) rays × (\d+) voxels, (\d+) non-zero path lengths · λ Float32Array\((\d+)\) · counts Uint32Array\((\d+)\), (\d+) events · ρ Float32Array\((\d+)\) after (\d+) steps, objective (-?[\d.]+(?:e[+-]?\d+)?) · cached in indexeddb$/;
+  /^Assembled (\d+) rays × (\d+) voxels, (\d+) non-zero path lengths · λ Float32Array\((\d+)\) · counts Uint32Array\((\d+)\), (\d+) events · ρ Float32Array\((\d+)\) after (\d+) steps, objective (-?[\d.]+(?:e[+-]?\d+)?) · Z peak (-?[\d.]+) at voxel (\d+) \(α̂ (-?[\d.]+)\) · cached in indexeddb$/;
 
 /** `CHROME_PATH`, or the first Chrome-like binary on this machine's PATH. */
 function resolveChrome() {
@@ -249,6 +256,9 @@ async function main() {
       events: Number(match[6]),
       density: Number(match[7]),
       steps: Number(match[8]),
+      peakZ: Number(match[10]),
+      voxel: Number(match[11]),
+      peakAlpha: Number(match[12]),
     };
     const misplaced = Object.entries(EXPECTED)
       .filter(([field]) => field in observed)

@@ -26,13 +26,14 @@ use umbra_physics::{generate_default, Fidelity, FluxTable};
 use umbra_recon::{
     A1Config, A2Config, Control, PoissonMap, Problem, Solver, Start, TransmissionEm,
 };
+use umbra_stats::{scan as score_scan, z_and_alpha_map, ScanConfig, ScanProblem};
 use wasm_bindgen::prelude::*;
 
 /// Version of the compute-core API contract.
 ///
 /// The TypeScript client compares this against its own expectation at startup,
 /// so a stale cached `.wasm` fails loudly instead of silently mismatching.
-pub const API_VERSION: &str = "0.2.0";
+pub const API_VERSION: &str = "0.3.0";
 
 /// Task id mixed into a `SIMULATE` stream id.
 ///
@@ -48,6 +49,14 @@ const TASK_SIMULATE: u32 = 3;
 /// request would hold a thread and starve the pool. Ten thousand steps is far
 /// past any interactive budget and still bounded.
 const MAX_RECON_ITERATIONS: u32 = 10_000;
+
+/// The largest template bank a single `SCAN` will run.
+///
+/// Every radius costs a footprint gather per voxel, so the scan's cost is linear
+/// in the bank. Eight discs span a cavern from one to eight voxels, which is
+/// past the range the default scene can resolve, and a bound keeps a malformed
+/// request from turning a worker into a space heater.
+const MAX_SCAN_SCALES: usize = 8;
 
 /// Returns the API version this build speaks.
 #[wasm_bindgen]
@@ -112,6 +121,31 @@ pub struct ReconOutcome {
     pub objective: Option<f64>,
 }
 
+/// Result of `SCAN`, matching `Results.SCAN` in the client.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScanOutcome {
+    /// `Z` at every voxel, from the best template scale at that position.
+    pub z: Vec<f32>,
+    /// The amplitude the winning scale fitted at each voxel, in `[0, 1]`.
+    pub alpha_hat: Vec<f32>,
+    /// The largest `Z` in the field.
+    pub max_z: f32,
+    /// Flat voxel index of that peak.
+    pub voxel: u32,
+    /// The amplitude at the peak: how much of the reference density is missing.
+    pub peak_alpha: f32,
+    /// Local one-sided `p` at the peak, from the score's normal tail.
+    pub peak_p: f32,
+    /// Number of template radii the scan ran.
+    pub scales: u32,
+    /// Wall clock for the transpose and back projection, in milliseconds, or
+    /// `-1.0` in the browser, which has no clock to read.
+    pub setup_ms: f64,
+    /// Wall clock for the correlation itself, in milliseconds, or `-1.0` in the
+    /// browser — the stage spec §6.5 budgets.
+    pub correlate_ms: f64,
+}
+
 /// Result of `BUILD_SYSTEM`, matching `Results.BUILD_SYSTEM` in the client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildSummary {
@@ -133,6 +167,14 @@ struct StoredSystem {
 struct StoredExpected {
     /// `λ_i / t` in counts per second, so exposure stays a free parameter.
     rate_per_s: Vec<f32>,
+    /// `(∂λ_i/∂X_i) / t`, the forward model's exact gradient per second.
+    ///
+    /// The scan needs `∂λ/∂X` and nothing else about the model, and it has to be
+    /// the derivative of the same law that produced the rates. Finite-differencing
+    /// `rate_per_s` would evaluate a different function whenever the exposure is
+    /// not tiny, and it is the derivative at the ray's own opacity that the
+    /// Fisher term is defined on.
+    drate_per_s: Vec<f32>,
     /// The scene the counts came from, mixed into the simulator's stream ids.
     scene_key: u64,
     /// The system the rates belong to, so `RECON` can find its operator.
@@ -254,10 +296,16 @@ impl Core {
             .iter()
             .map(|lambda| lambda / exposure)
             .collect();
+        let drate_per_s: Vec<f32> = evaluated
+            .dlambda_dx
+            .iter()
+            .map(|slope| slope / exposure)
+            .collect();
         self.expected.insert(
             expected_key.to_string(),
             StoredExpected {
                 rate_per_s,
+                drate_per_s,
                 scene_key,
                 system_key: system_key.to_string(),
                 fidelity,
@@ -437,6 +485,142 @@ impl Core {
         }
     }
 
+    /// `SCAN`: the A6 multi-scale score scan over the counts a `SIMULATE` drew.
+    ///
+    /// `H0` is the scene the counts came from — its own density, its own flux
+    /// table, its fidelity and the exposure they were drawn at — so the test
+    /// asks the only question a landmark-free scan can answer: does this data
+    /// prefer a deficit of `α` × (reference density) inside a disc of some radius
+    /// *anywhere*, and where is that best?
+    ///
+    /// This is the score scan, not the refined likelihood ratio. `refine_lrt`
+    /// assumes the L0 transmission law, and the default scene is L1, so refining
+    /// here would fit a law the counts were not drawn from. The reported `Z` is a
+    /// local score significance, which is what a picture of the field should be.
+    pub fn scan(
+        &self,
+        counts_key: &str,
+        scales_voxels: &[f32],
+        profile_nuisances: bool,
+    ) -> Result<ScanOutcome, CoreError> {
+        if scales_voxels.is_empty() {
+            return Err(CoreError::new(
+                "scales",
+                "a scan needs at least one template radius",
+            ));
+        }
+        if scales_voxels.len() > MAX_SCAN_SCALES {
+            return Err(CoreError::new(
+                "scales",
+                format!(
+                    "{} template radii exceeds the {MAX_SCAN_SCALES} one scan will run",
+                    scales_voxels.len()
+                ),
+            ));
+        }
+        if let Some(bad) = scales_voxels
+            .iter()
+            .find(|radius| !radius.is_finite() || **radius <= 0.0)
+        {
+            return Err(CoreError::new(
+                "scales",
+                format!("template radii must be finite and positive, got {bad}"),
+            ));
+        }
+        let stored_counts = self.counts.get(counts_key).ok_or_else(|| {
+            CoreError::new(
+                "unknown_counts",
+                format!("no counts for key `{counts_key}`: run SIMULATE first"),
+            )
+        })?;
+        let stored_expected = self
+            .expected
+            .get(&stored_counts.expected_key)
+            .ok_or_else(|| {
+                CoreError::new(
+                    "unknown_expected",
+                    format!(
+                        "counts `{counts_key}` name missing expected counts `{}`",
+                        stored_counts.expected_key
+                    ),
+                )
+            })?;
+        let stored = self
+            .systems
+            .get(&stored_expected.system_key)
+            .ok_or_else(|| {
+                CoreError::new(
+                    "unknown_system",
+                    format!(
+                        "no system for key `{}`: run BUILD_SYSTEM first",
+                        stored_expected.system_key
+                    ),
+                )
+            })?;
+        if stored_counts.counts.len() != stored.system.ray_count() {
+            return Err(CoreError::new(
+                "counts",
+                format!(
+                    "{} counts for {} rays: the dataset does not match its operator",
+                    stored_counts.counts.len(),
+                    stored.system.ray_count()
+                ),
+            ));
+        }
+        // The scan fits the observation, so it needs λ and ∂λ/∂X at the exposure
+        // the counts were drawn at, not the per-second rate the core stores.
+        let exposure = stored_counts.exposure_s;
+        let lambda0: Vec<f32> = stored_expected
+            .rate_per_s
+            .iter()
+            .map(|rate| rate * exposure)
+            .collect();
+        let dlambda_dx: Vec<f32> = stored_expected
+            .drate_per_s
+            .iter()
+            .map(|slope| slope * exposure)
+            .collect();
+        let counts: Vec<f32> = stored_counts
+            .counts
+            .iter()
+            .map(|count| *count as f32)
+            .collect();
+        // H0 is the scene as authored: the template removes a fraction of *this*
+        // density, so the same fraction inside dense rock removes more opacity —
+        // and scores higher — than it would in air.
+        let density = stored.scene.density();
+        let problem = ScanProblem {
+            system: &stored.system,
+            counts: &counts,
+            lambda0: &lambda0,
+            dlambda_dx: &dlambda_dx,
+            density: &density,
+            attenuation_gcm2: stored.scene.forward_params().l0_attenuation_gcm2,
+        };
+        let config = ScanConfig {
+            scales_voxels: scales_voxels.to_vec(),
+            profile_nuisances,
+            ..ScanConfig::default()
+        };
+        let found = score_scan(&problem, &config);
+        // Candidates for the peak and its amplitude, the field for the picture.
+        // Two sweeps of the same walk, which is what makes them agree; at the
+        // default grid each is a few milliseconds.
+        let (z, alpha_hat) = z_and_alpha_map(&problem, &config);
+        let peak = found.peak;
+        Ok(ScanOutcome {
+            max_z: peak.map_or(0.0, |candidate| candidate.z),
+            voxel: peak.map_or(0, |candidate| candidate.voxel as u32),
+            peak_alpha: peak.map_or(0.0, |candidate| candidate.alpha_hat),
+            peak_p: peak.map_or(0.5, |candidate| candidate.local_p),
+            setup_ms: millis(found.timing.setup),
+            correlate_ms: millis(found.timing.correlate),
+            scales: scales_voxels.len() as u32,
+            z,
+            alpha_hat,
+        })
+    }
+
     /// Number of systems the core is holding, for the worker's own accounting.
     pub fn system_count(&self) -> usize {
         self.systems.len()
@@ -462,6 +646,26 @@ fn drive<S: Solver>(mut solver: S, iterations: u32) -> ReconOutcome {
         density: solver.estimate().to_vec(),
         iterations: taken,
         objective,
+    }
+}
+
+/// Whether this build can read a clock.
+///
+/// `wasm32-unknown-unknown` has no implementation of `Instant::now`, so the scan
+/// runs untimed there and its durations must not be reported as a measured zero.
+#[cfg(target_arch = "wasm32")]
+const CLOCK_AVAILABLE: bool = false;
+
+/// The native build has a clock.
+#[cfg(not(target_arch = "wasm32"))]
+const CLOCK_AVAILABLE: bool = true;
+
+/// A duration in milliseconds, or `-1.0` where this build cannot time itself.
+fn millis(duration: std::time::Duration) -> f64 {
+    if CLOCK_AVAILABLE {
+        duration.as_secs_f64() * 1e3
+    } else {
+        -1.0
     }
 }
 
@@ -699,6 +903,25 @@ impl ComputeCore {
             })
             .map_err(fault)
     }
+
+    /// `SCAN`: the A6 score scan over stored counts, returning the `Z` field as
+    /// a `Float32Array` the worker transfers.
+    ///
+    /// `scales_voxels` are the template radii; `profile_nuisances` refits the
+    /// kept candidates with the systematics profiled, which costs a handful of
+    /// matvecs and is reported in the result's `Z`.
+    #[wasm_bindgen(js_name = scan)]
+    pub fn scan(
+        &self,
+        counts_key: &str,
+        scales_voxels: Vec<f32>,
+        profile_nuisances: bool,
+    ) -> Result<ScanResult, JsValue> {
+        self.core
+            .scan(counts_key, &scales_voxels, profile_nuisances)
+            .map(ScanResult::from)
+            .map_err(fault)
+    }
 }
 
 /// `RECON` returned across the boundary.
@@ -727,6 +950,93 @@ impl ReconResult {
     #[wasm_bindgen(getter)]
     pub fn objective(&self) -> Option<f64> {
         self.objective
+    }
+}
+
+/// `SCAN` returned across the boundary.
+#[wasm_bindgen]
+pub struct ScanResult {
+    z: Vec<f32>,
+    alpha_hat: Vec<f32>,
+    max_z: f32,
+    voxel: u32,
+    peak_alpha: f32,
+    peak_p: f32,
+    scales: u32,
+    setup_ms: f64,
+    correlate_ms: f64,
+}
+
+impl From<ScanOutcome> for ScanResult {
+    fn from(outcome: ScanOutcome) -> Self {
+        Self {
+            z: outcome.z,
+            alpha_hat: outcome.alpha_hat,
+            max_z: outcome.max_z,
+            voxel: outcome.voxel,
+            peak_alpha: outcome.peak_alpha,
+            peak_p: outcome.peak_p,
+            scales: outcome.scales,
+            setup_ms: outcome.setup_ms,
+            correlate_ms: outcome.correlate_ms,
+        }
+    }
+}
+
+#[wasm_bindgen]
+impl ScanResult {
+    /// `Z` at every voxel, as a `Float32Array`.
+    #[wasm_bindgen(getter)]
+    pub fn z(&self) -> Vec<f32> {
+        self.z.clone()
+    }
+
+    /// The amplitude fitted at each voxel's winning scale.
+    #[wasm_bindgen(getter, js_name = alphaHat)]
+    pub fn alpha_hat(&self) -> Vec<f32> {
+        self.alpha_hat.clone()
+    }
+
+    /// The largest `Z` in the field.
+    #[wasm_bindgen(getter, js_name = maxZ)]
+    pub fn max_z(&self) -> f32 {
+        self.max_z
+    }
+
+    /// Flat voxel index of the peak.
+    #[wasm_bindgen(getter)]
+    pub fn voxel(&self) -> u32 {
+        self.voxel
+    }
+
+    /// The amplitude at the peak.
+    #[wasm_bindgen(getter, js_name = peakAlpha)]
+    pub fn peak_alpha(&self) -> f32 {
+        self.peak_alpha
+    }
+
+    /// Local one-sided `p` at the peak.
+    #[wasm_bindgen(getter, js_name = peakP)]
+    pub fn peak_p(&self) -> f32 {
+        self.peak_p
+    }
+
+    /// Number of template radii the scan ran.
+    #[wasm_bindgen(getter)]
+    pub fn scales(&self) -> u32 {
+        self.scales
+    }
+
+    /// Transpose and back projection, in milliseconds.
+    #[wasm_bindgen(getter, js_name = setupMs)]
+    pub fn setup_ms(&self) -> f64 {
+        self.setup_ms
+    }
+
+    /// The correlation itself, in milliseconds.
+    #[wasm_bindgen(getter, js_name = correlateMs)]
+    pub fn correlate_ms(&self) -> f64 {
+        self.correlate_ms
     }
 }
 
@@ -1108,6 +1418,141 @@ mod tests {
             .code,
             "params",
             "a whole-number parameter must not be truncated"
+        );
+    }
+
+    /// A core with the test scene built, λ stored and counts drawn from it.
+    fn simulated(seed: u64) -> Core {
+        let text = scene_json(3600.0, 8, 3);
+        let mut core = Core::new();
+        core.build_system("sys", &text).expect("build");
+        let density = core.scene_density("sys").expect("density");
+        core.expected("sys", "exp", &density, None)
+            .expect("expected");
+        core.simulate("counts", "exp", seed, 3600.0)
+            .expect("simulate");
+        core
+    }
+
+    #[test]
+    fn scan_maps_every_voxel_and_does_not_invent_a_discovery() {
+        let core = simulated(7);
+        let outcome = core.scan("counts", &[1.0, 2.0], false).expect("scan");
+        assert_eq!(outcome.z.len(), 256, "one Z per voxel");
+        assert_eq!(outcome.alpha_hat.len(), 256);
+        assert!(
+            outcome.z.iter().all(|z| z.is_finite()),
+            "no NaN in the field"
+        );
+        assert!(
+            outcome.alpha_hat.iter().all(|a| (0.0..=1.0).contains(a)),
+            "every amplitude must sit inside the test's bounds"
+        );
+        assert_eq!(outcome.scales, 2);
+        assert!((outcome.voxel as usize) < 256);
+        assert!(outcome.setup_ms >= 0.0 && outcome.correlate_ms >= 0.0);
+        // The candidate walk and the field walk are two sweeps, and they have to
+        // describe the same scan: a peak that is not the field's maximum means
+        // one of them is looking at different candidates.
+        let field_peak = outcome.z.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert_eq!(outcome.max_z, field_peak);
+        // Counts drawn from their own model must not look like a discovery.
+        assert!(
+            outcome.max_z < 5.0,
+            "Poisson noise came back at {}σ",
+            outcome.max_z
+        );
+    }
+
+    #[test]
+    fn a_region_with_more_counts_than_its_model_expects_is_detected() {
+        let mut core = simulated(7);
+        let quiet = core.scan("counts", &[1.0, 2.0], false).expect("quiet scan");
+
+        // A void lets more muons through, so the rays crossing it see more counts
+        // than the bulk model predicts. Boosting every ray through the busiest
+        // column is a deficit of the reference density along that column, and the
+        // one-sided scan has to prefer it to noise.
+        let rays: Vec<usize> = {
+            let system = &core.systems.get("sys").expect("system").system;
+            let mut crossing = vec![0usize; 16];
+            for ray in 0..system.ray_count() {
+                for (column, _) in system.l.row(ray) {
+                    crossing[column % 16] += 1;
+                }
+            }
+            let busiest = (0..16)
+                .max_by_key(|&column| crossing[column])
+                .expect("a column");
+            (0..system.ray_count())
+                .filter(|&ray| system.l.row(ray).any(|(column, _)| column % 16 == busiest))
+                .collect()
+        };
+        assert!(!rays.is_empty(), "the boosted region must be illuminated");
+        let stored = core.counts.get_mut("counts").expect("counts");
+        for ray in rays {
+            stored.counts[ray] = stored.counts[ray].saturating_mul(2).max(1);
+        }
+
+        let found = core.scan("counts", &[1.0, 2.0], false).expect("scan");
+        assert!(
+            found.max_z > quiet.max_z + 3.0,
+            "the injected deficit ({:.2}σ) did not stand out from the noise ({:.2}σ)",
+            found.max_z,
+            quiet.max_z
+        );
+        assert!(
+            found.peak_alpha > 0.2,
+            "the peak claims only {} of the density is missing",
+            found.peak_alpha
+        );
+    }
+
+    /// The scene the app ships, end to end through the scan.
+    ///
+    /// The scenes above are 16 × 16 and built by this module; this one is the
+    /// document in the repository, so a failure only the shipped scene triggers
+    /// — a 32 × 32 grid, an L1 flux integral, a capsule void — reproduces here
+    /// instead of only in the browser.
+    #[test]
+    fn the_shipped_scene_scans() {
+        let text = include_str!("../../../web/src/scenes/default.json");
+        let mut core = Core::new();
+        core.build_system("sys", text).expect("build");
+        let density = core.scene_density("sys").expect("density");
+        core.expected("sys", "exp", &density, None)
+            .expect("expected");
+        core.simulate("counts", "exp", 7, 2_592_000.0)
+            .expect("simulate");
+        let outcome = core.scan("counts", &[1.0, 2.0], false).expect("scan");
+        assert_eq!(outcome.z.len(), 1024, "32 x 32 voxels");
+        assert!(outcome.max_z.is_finite());
+    }
+
+    #[test]
+    fn scan_refuses_what_it_cannot_run() {
+        let core = simulated(7);
+        assert_eq!(
+            core.scan("nope", &[1.0], false)
+                .expect_err("unknown counts")
+                .code,
+            "unknown_counts"
+        );
+        assert_eq!(
+            core.scan("counts", &[], false).expect_err("no scales").code,
+            "scales"
+        );
+        assert_eq!(
+            core.scan("counts", &[0.0], false)
+                .expect_err("zero radius")
+                .code,
+            "scales"
+        );
+        assert_eq!(
+            core.scan("counts", &[1.0; 9], false)
+                .expect_err("too many scales")
+                .code,
+            "scales"
         );
     }
 }
