@@ -18,13 +18,13 @@ on:
 permissions:
   contents: read
 
-# Per ref *and* per event. A push must cancel a superseded push, but a dispatch
-# must not be cancelled by one: a calibration campaign runs for hours, and this
-# group cancels the whole run -- jobs with their own concurrency included -- so a
-# merge of something unrelated used to kill it. (Job-level concurrency does not
-# help here; the run itself is what gets cancelled.)
+# Per ref, per event, and per dispatch. A push must cancel a superseded push, so
+# pushes share one slot; a calibration campaign runs for hours and must not be
+# cancelled by a merge, so a dispatch gets the run id in its slot instead. This
+# group cancels the whole run -- jobs with their own concurrency included --
+# which is why the discrimination has to live here rather than on the job.
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'gates' }}
   cancel-in-progress: true
 
 env:
@@ -142,9 +142,9 @@ jobs:
     name: LEE calibration campaign
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    # A second line of defence: two campaign dispatches on the same ref should not
-    # cancel each other silently, because the losing run may be the only one that
-    # had reached the interesting tail.
+    # A second line of defence against two campaigns overlapping on one ref: the
+    # second waits here instead of cancelling the first, because the losing run
+    # may be the only one that reached the interesting tail.
     concurrency:
       group: lee-calibration-${{ github.ref }}
       cancel-in-progress: false
