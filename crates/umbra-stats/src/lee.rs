@@ -660,7 +660,7 @@ fn ln_gamma(x: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::scan::scan;
-    use umbra_core::{Csr, Grid2, GridAny};
+    use umbra_core::{Csr, Grid2, Grid3, GridAny};
     use umbra_forward::{RayCell, System};
 
     fn scene_2d(n: usize) -> (System, Vec<f32>, Vec<f32>, Vec<f32>) {
@@ -687,6 +687,44 @@ mod tests {
                 })
                 .collect(),
             grid: GridAny::Two(grid),
+            poses: Vec::new(),
+        };
+        let opacity = system.opacity(&density);
+        let lambda0: Vec<f32> = opacity
+            .iter()
+            .map(|&x| 1.0e3 * (-x / 1.0e3).exp())
+            .collect();
+        let dlambda_dx: Vec<f32> = lambda0.iter().map(|&l| -l / 1.0e3).collect();
+        (system, density, lambda0, dlambda_dx)
+    }
+
+    /// The campaign scene one dimension up: one ray along `z` per column, so
+    /// every voxel is seen by exactly one ray, as in 2-D.
+    fn scene_3d(n: usize) -> (System, Vec<f32>, Vec<f32>, Vec<f32>) {
+        let grid = Grid3::new([n as u32; 3], [0.0; 3], 0.01);
+        let plane = n * n;
+        let mut indptr = vec![0u32];
+        let mut indices = Vec::new();
+        let mut data = Vec::new();
+        for column in 0..plane {
+            for k in 0..n {
+                indices.push((k * plane + column) as u32);
+                data.push(1.0f32);
+            }
+            indptr.push(indices.len() as u32);
+        }
+        let density = vec![2.65f32; grid.cell_count()];
+        let system = System {
+            l: Csr::new(indptr, indices, data),
+            rays: (0..plane)
+                .map(|_| RayCell {
+                    det: 0,
+                    zen: 0.0,
+                    az: 0.0,
+                    k_scale: 1.0,
+                })
+                .collect(),
+            grid: GridAny::Three(grid),
             poses: Vec::new(),
         };
         let opacity = system.opacity(&density);
@@ -941,6 +979,55 @@ mod tests {
         assert!(
             (0.80..0.95).contains(&p3),
             "3σ global p {p3:.3} is not a probability the toys corroborate"
+        );
+    }
+
+    #[test]
+    fn euler_counts_a_tunnel_as_zero() {
+        // A block with a column removed is solid matter with a hole through it:
+        // χ = 0, and `V − E + F − C` has to cancel to exactly that. A count that
+        // dropped the `− C` term would read 1 here and call a tunnel a ball.
+        let (nx, ny, nz) = (3, 3, 2);
+        let mut field = vec![1.0f32; nx * ny * nz];
+        for k in 0..nz {
+            field[(k * ny + 1) * nx + 1] = 0.0;
+        }
+        assert_eq!(euler_characteristic_3d(&field, [nx, ny, nz], 0.5), 0);
+    }
+
+    #[test]
+    fn the_extrapolation_holds_on_a_volume() {
+        // The law counts excursion regions, and on a volume they are sheets a ray
+        // cuts through rather than strips along it — a geometry the 2-D campaign
+        // never exercises. The tolerance is a factor of two because 400 toys
+        // cannot do better: at 2σ they leave about nine above the line, which is
+        // ±33% on the tail by itself.
+        let (system, density, lambda0, dlambda_dx) = scene_3d(16);
+        let cfg = ScanConfig {
+            scales_voxels: vec![1.0],
+            top_k: 3,
+            ..ScanConfig::default()
+        };
+        let lee = LeeConfig { u0: 1.5, dim: 3 };
+        let problem = ScanProblem {
+            system: &system,
+            counts: &lambda0,
+            lambda0: &lambda0,
+            dlambda_dx: &dlambda_dx,
+            density: &density,
+            attenuation_gcm2: 1.0e3,
+        };
+        let calibration = lee_calibrate_with(&problem, &cfg, &lee, 400, 0x3d5eed, 4);
+        assert!(
+            calibration.toys_above_u0 > 20,
+            "the volume anchor must see excursions: {} toys above u0",
+            calibration.toys_above_u0
+        );
+        let empirical = calibration.empirical_global_p(2.0);
+        let model = calibration.extrapolated_global_p(2.0);
+        assert!(
+            model > 0.5 * empirical && model < 2.0 * empirical,
+            "volume extrapolation {model:.3} against the toys' {empirical:.3}"
         );
     }
 

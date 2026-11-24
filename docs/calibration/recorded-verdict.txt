@@ -1,0 +1,12 @@
+# The M3 rate criterion's last recorded verdict.
+#
+# A campaign run compares itself against this file: the result is comparable only
+# when it has at least as many toys in the same search dimension, and a comparable
+# change opens an issue so the docs move with the evidence. Update this file in
+# the same commit as the report that changes the verdict; never on its own.
+#
+# Current: `docs/calibration/lee-2d-1e5-fixed.md` — the corrected model puts 128
+# of 100 000 toys over its 3σ threshold. The rate is 5% below nominal and the
+# Wilson floor misses the ±20% band by 0.3%, so the criterion is undecided on
+# sample size, not on the model.
+verdict=UNDECIDED toys=100000 dim=2 rate=1.280e-3 low=1.077e-3 high=1.522e-3 threshold=4.87

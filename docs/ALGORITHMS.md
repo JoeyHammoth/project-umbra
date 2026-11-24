@@ -270,6 +270,32 @@ arithmetic — that `p(5σ)` is `1 − e^{−⟨N⟩}` from the upcrossing count
 0.86 rather than a clamp at one; and that the calibration is unchanged when its
 toys are merged in reverse order.
 
+The law was only ever checked on a plane until the campaign learned a dimension
+knob, and a plane is a weak test of it: there an excursion is a strip the ray
+runs along, while in a volume it is a sheet the ray cuts through, and the `χ`
+closure carries one more term. `UMBRA_LEE_DIM=3` runs the same bench on `40³`
+voxels (`1600` rays, one per column), and
+[`docs/calibration/lee-3d-40-2e4.md`](calibration/lee-3d-40-2e4.md) records
+20 000 toys on it: `χ̄(u₀) = 19.60 ± 0.05`, and the model tracks the toys at
+1.02×, 1.14×, 1.15×, 1.04× and 1.02× from 3σ to 5σ. The 2 000-toy run before it
+read 1.67× at 4.5σ and 0.61× at 5σ on 21 and 5 exceedances — what a tail looks
+like when the sample, not the model, is the uncertainty. The volume divides the
+search space differently, so its *rates* are not comparable with the plane's; the
+ratio is what the law is being checked on. `euler_counts_a_tunnel_as_zero` pins
+the `− C` term on a block with a column removed (a count without it reads 1 and
+calls a tunnel a ball), and `the_extrapolation_holds_on_a_volume` runs the whole
+chain — Poisson toys, scan, `χ`, extrapolation — on a `16³` scene.
+
+The campaign now acts on its own result rather than waiting for a reader. Its
+report ends with a machine-readable verdict line, `tools/lee-verdict.sh` reads
+it, and the campaign job dispatches the `10⁵` confirmation when a `10⁴` run
+reports UNDECIDED (a confirmation never dispatches another, and the weekly
+scheduled run only reports) and opens an issue when a run with at least as many
+toys in the same dimension changes
+[`docs/calibration/recorded-verdict.txt`](calibration/recorded-verdict.txt). The
+comparison is gated on toys and dimension because a smaller sample cannot
+overturn a larger decision and a volume is a different search space.
+
 `cargo bench -p umbra-stats --bench lee` runs the campaign itself. On the 200²
 scene with 200 toys, the anchor is no longer a factor-of-three decision:
 
@@ -311,6 +337,18 @@ What it is not: certified at the far tail. The `z = 5` row rests on 76
 exceedances in the campaign and the model is 10% under them, so a `5σ` global
 `p` here is a model informed by a measurement rather than a measurement. The
 campaign runs weekly as a CI artifact for that reason.
+
+A second 10⁵ campaign re-ran the whole thing on a fresh seed after the fix
+([`docs/calibration/lee-2d-1e5-fixed.md`](calibration/lee-2d-1e5-fixed.md), seed
+`0x51dec0de`, 4598.2 s on 4 CI cores, `χ̄ = 8.120 ± 0.010`), so the table above is
+not the sample that diagnosed the fault. It reads 1.01×, 1.00×, 0.95×, 0.95× and
+1.04× from 3σ to 5σ, with the model's crossing at 4.87σ against the toys' 4.85σ.
+At that threshold 128 of 100 000 toys cleared it — rate 1.280e-3, 5% below
+nominal, Wilson 95% [1.077e-3, 1.522e-3] against the ±20% band [1.080e-3,
+1.620e-3]. The criterion's box stays unchecked, and the reason is now the
+interval's floor missing by 0.3%: three times the toys would halve the
+half-width again and decide it. That is a sample-size miss, not a modelling one,
+which is the difference the previous FAIL did not have.
 
 What no unit test can pin is the spec's calibration target itself — the global
 rate at the model's `3σ` threshold, with the Wilson interval its exceedances
