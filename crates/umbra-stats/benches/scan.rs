@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use umbra_core::{Csr, Grid2, Grid3, GridAny};
 use umbra_forward::{RayCell, System};
-use umbra_stats::{scan, ScanConfig, ScanProblem};
+use umbra_stats::{scan, scan_with_map, z_and_alpha_map, ScanConfig, ScanProblem};
 
 /// Two-dimensional scene: one ray per row, `n` cells long.
 fn scene_2d(n: usize) -> (System, Vec<f32>, Vec<f32>, Vec<f32>) {
@@ -155,5 +155,40 @@ fn main() {
                 budget,
             );
         }
+    }
+
+    // The app asks for the peak and the field together. Doing that as two calls
+    // walked the candidate set twice, which was the whole cost of the browser's
+    // SCAN stage; this reports both shapes on the same 10⁶-candidate scene.
+    {
+        let (system, density, lambda0, dlambda_dx) = scene_2d(1000);
+        let counts: Vec<f32> = lambda0.iter().map(|l| l * 1.02).collect();
+        let problem = ScanProblem {
+            system: &system,
+            counts: &counts,
+            lambda0: &lambda0,
+            dlambda_dx: &dlambda_dx,
+            density: &density,
+            attenuation_gcm2: 1.0e3,
+        };
+        let _ = scan_with_map(&problem, &single);
+        let mut split = Vec::new();
+        let mut joined = Vec::new();
+        for _ in 0..runs {
+            let started = Instant::now();
+            let _ = scan(&problem, &single);
+            let _ = z_and_alpha_map(&problem, &single);
+            split.push(started.elapsed());
+            let started = Instant::now();
+            let _ = scan_with_map(&problem, &single);
+            joined.push(started.elapsed());
+        }
+        split.sort();
+        joined.sort();
+        println!(
+            "2-D peak + field: {:.1} ms as two sweeps, {:.1} ms as one (best of {runs})",
+            ms(split[0]),
+            ms(joined[0]),
+        );
     }
 }
