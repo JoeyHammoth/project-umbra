@@ -15,7 +15,7 @@ pub use laplace::{
 };
 pub use lee::{
     euler_characteristic_2d, euler_characteristic_3d, lee_calibrate, lee_calibrate_with, lee_toy,
-    lee_toys, LeeCalibration, LeeConfig, ToyResult, MAX_LEE_WORKERS,
+    lee_toys, rate_estimate, LeeCalibration, LeeConfig, RateEstimate, ToyResult, MAX_LEE_WORKERS,
 };
 pub use profile::{
     profile_candidate, profile_p, CandidateProfile, NuisanceFit, NuisancePrior, ProfilerConfig,

@@ -165,6 +165,60 @@ impl LeeCalibration {
     }
 }
 
+/// A measured rate with its 95% Wilson interval.
+///
+/// The milestone's criterion is about a *rate*, and a rate is not a number until
+/// its interval is quoted: ten exceedances in ten thousand toys is `1.0e-3`, but
+/// it is equally compatible with anything from `5.7e-4` to `1.8e-3`, and the
+/// 3σ box cannot be closed on a point that wide.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RateEstimate {
+    /// Exceedances over toys.
+    pub rate: f64,
+    /// Low end of the 95% interval.
+    pub low: f64,
+    /// High end of the 95% interval.
+    pub high: f64,
+}
+
+impl RateEstimate {
+    /// Whether the whole interval sits inside `nominal ± tolerance`.
+    pub fn inside(&self, nominal: f64, tolerance: f64) -> bool {
+        self.low >= nominal * (1.0 - tolerance) && self.high <= nominal * (1.0 + tolerance)
+    }
+
+    /// Whether the interval misses the band entirely, so more toys cannot change
+    /// the answer. `false` here means *undecided*, never *passing*.
+    pub fn outside(&self, nominal: f64, tolerance: f64) -> bool {
+        self.high < nominal * (1.0 - tolerance) || self.low > nominal * (1.0 + tolerance)
+    }
+}
+
+/// Wilson score interval for `exceedances / toys` at 95%.
+///
+/// Wilson rather than the textbook normal interval because the rates here are
+/// small: with no exceedances the normal interval collapses to a point at zero,
+/// which would report certainty about a rare event from a sample that saw none of
+/// it. Wilson keeps a finite ceiling instead.
+///
+/// # Panics
+///
+/// Panics if `toys` is zero.
+pub fn rate_estimate(exceedances: u32, toys: u32) -> RateEstimate {
+    assert!(toys > 0, "a rate needs at least one draw");
+    let n = f64::from(toys);
+    let p = f64::from(exceedances.min(toys)) / n;
+    let z = 1.959_963_984_540_054f64;
+    let denom = 1.0 + z * z / n;
+    let centre = (p + z * z / (2.0 * n)) / denom;
+    let half = z / denom * (p * (1.0 - p) / n + z * z / (4.0 * n * n)).sqrt();
+    RateEstimate {
+        rate: p,
+        low: (centre - half).max(0.0),
+        high: (centre + half).min(1.0),
+    }
+}
+
 /// Runs `n_toys` background-only toys and assembles the calibration.
 ///
 /// Convenience wrapper over [`lee_toy`]; a caller with a worker pool should map
@@ -1120,6 +1174,38 @@ mod tests {
             "planted ({}, {}) radius {radius}: peak ({px}, {py}), off {offset:.2} vox, Z {:.2}, \
              depth {:.2}; 99th null percentile {null_q99:.2}; global p {global_p:.2e}",
             centre.0, centre.1, peak.z, peak.alpha_hat
+        );
+    }
+
+    #[test]
+    fn a_rate_interval_narrows_with_toys_and_keeps_its_point() {
+        let ten = rate_estimate(10, 10_000);
+        let hundred = rate_estimate(100, 100_000);
+        assert!((ten.rate - 1.0e-3).abs() < 1e-12);
+        assert!(ten.low < ten.rate && ten.rate < ten.high);
+        assert!(
+            ten.high - ten.low > hundred.high - hundred.low,
+            "ten times the toys must narrow the interval: {ten:?} vs {hundred:?}"
+        );
+        // The nominal 3σ rate and its ±20% band. This is the arithmetic the
+        // campaign's verdict rests on, so it is checked rather than trusted.
+        let nominal = 1.35e-3;
+        assert!(
+            !ten.inside(nominal, 0.20) && !ten.outside(nominal, 0.20),
+            "10 in 10^4 must straddle the band, not decide it: {ten:?}"
+        );
+        assert!(
+            rate_estimate(1_350, 1_000_000).inside(nominal, 0.20),
+            "1 350 in 10^6 sits on nominal"
+        );
+        // An empty tail is a finding, not a need for more toys: the whole
+        // interval is below the band, and it still has a finite ceiling — the
+        // normal interval would have called zero certain.
+        let none = rate_estimate(0, 10_000);
+        assert!(none.outside(nominal, 0.20) && !none.inside(nominal, 0.20));
+        assert!(
+            none.high > 0.0 && none.high < nominal * 0.8,
+            "an empty tail has a finite ceiling, under the band's floor: {none:?}"
         );
     }
 }

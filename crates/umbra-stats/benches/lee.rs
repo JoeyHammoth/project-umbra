@@ -2,7 +2,11 @@
 //! extrapolation, on the same code that ships.
 //!
 //! Defaults are the campaign the spec asks for — `1000²` voxels (`10⁶`) and `10⁴`
-//! toys — because this is the run that produces the published report. Env knobs:
+//! toys — because this is the run that produces the published report. M3's rate
+//! criterion is decided at the end of the report, from the Wilson interval of the
+//! exceedances: `10⁴` toys straddle the ±20% band around nominal 3σ, so the
+//! campaign has to be run at `10⁵` (~3 h on a CI runner) before that box can move.
+//! Env knobs:
 //!
 //! ```text
 //! UMBRA_LEE_GRID     scene width, default 1000
@@ -24,7 +28,9 @@ use std::time::Instant;
 
 use umbra_core::{Csr, Grid2, GridAny};
 use umbra_forward::{RayCell, System};
-use umbra_stats::{chi2_mixture_p, lee_calibrate_with, LeeConfig, ScanConfig, ScanProblem};
+use umbra_stats::{
+    chi2_mixture_p, lee_calibrate_with, rate_estimate, LeeConfig, ScanConfig, ScanProblem,
+};
 
 /// The spec's nominal 3σ false-positive rate (§7): a correct global `p` curve
 /// should reach this only at the threshold that the correction assigns to `3σ`.
@@ -124,6 +130,35 @@ fn main() {
         z += 0.05;
     }
 
+    // The M3 criterion, computed rather than narrated. The threshold comes from
+    // the *model* — the `z` at which the extrapolation reaches nominal — because
+    // choosing it from the empirical tail and then quoting the empirical rate
+    // there would be scoring the sample against itself.
+    let mut model_3sigma = None;
+    let mut z = 2.0f32;
+    while z <= 6.0 {
+        if f64::from(calibration.extrapolated_global_p(z)) <= NOMINAL_3_SIGMA {
+            model_3sigma = Some(z);
+            break;
+        }
+        z += 0.01;
+    }
+    let exceedances = model_3sigma.map_or(0, |threshold| {
+        calibration
+            .maxima
+            .iter()
+            .filter(|&&max| max >= threshold)
+            .count() as u32
+    });
+    let estimate = rate_estimate(exceedances, toys);
+    let verdict = if estimate.inside(NOMINAL_3_SIGMA, 0.20) {
+        "PASS"
+    } else if estimate.outside(NOMINAL_3_SIGMA, 0.20) {
+        "FAIL"
+    } else {
+        "UNDECIDED"
+    };
+
     let mut report = String::new();
     let _ = writeln!(report, "# LEE calibration — 2-D, {} toys\n", toys);
     let _ = writeln!(
@@ -187,6 +222,24 @@ fn main() {
                 "\n**Global 3σ threshold:** not reached within `z ≤ 6` at {toys} toys; the tail needs a larger campaign.",
             );
         }
+    }
+    let _ = writeln!(
+        report,
+        "\n## M3 criterion (spec §10.3): global false-positive rate at 3σ\n\n| | |\n|---|---|\n| Model 3σ threshold | {} |\n| Exceedances | {exceedances} of {toys} |\n| Empirical rate | {:.3e} |\n| 95% interval (Wilson) | [{:.3e}, {:.3e}] |\n| Nominal band (±20%) | [{:.3e}, {:.3e}] |\n| Verdict | **{verdict}** |",
+        model_3sigma.map_or("not reached by z = 6".to_string(), |threshold| format!(
+            "z = {threshold:.2}"
+        )),
+        estimate.rate,
+        estimate.low,
+        estimate.high,
+        NOMINAL_3_SIGMA * 0.8,
+        NOMINAL_3_SIGMA * 1.2
+    );
+    if verdict == "UNDECIDED" {
+        let _ = writeln!(
+            report,
+            "\nUNDECIDED means the interval straddles the band: this campaign cannot say whether the rate is within ±20% of nominal, and the answer is more toys rather than a different threshold."
+        );
     }
     let _ = writeln!(
         report,
