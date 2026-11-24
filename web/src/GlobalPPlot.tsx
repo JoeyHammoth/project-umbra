@@ -9,15 +9,22 @@
  * draws the Gross–Vitells extrapolation past where the toys reach, dashed,
  * because that part is a model and not a measurement.
  *
+ * Three things the figure refuses to overstate. The model is dashed and labelled
+ * as a model. It carries `⟨χ⟩`'s standard error as a shaded band, because the
+ * anchor is a mean over toys and the branch moves with it. And the largest
+ * maximum in the null is marked, so the reader can see exactly where the
+ * measured part stops and the extrapolated part begins.
+ *
  * The geometry lives in `plot.ts` so the axis arithmetic is tested without a
  * renderer; this file only places points.
  */
 
+import type { CurvePoint } from './plot.ts';
 import {
   NOMINAL_3_SIGMA,
   Z_AXIS,
   curvePoints,
-  extrapolatedPoints,
+  eulerBand,
   logFraction,
   zFraction,
 } from './plot.ts';
@@ -41,8 +48,12 @@ export interface GlobalPPlotProps {
    * means there is no measured excursion to extrapolate from, so no dashed curve.
    */
   meanEuler?: number;
+  /** Standard error of that mean; 0 draws the centre line without a band. */
+  meanEulerStderr?: number;
   /** Euler anchor, in sigma. */
   u0?: number;
+  /** The largest maximum in the null: where the measured curve stops. */
+  maxToyZ?: number;
 }
 
 export function GlobalPPlot({
@@ -50,25 +61,34 @@ export function GlobalPPlot({
   peakZ,
   toys,
   meanEuler = 0,
+  meanEulerStderr = 0,
   u0 = 0,
+  maxToyZ = 0,
 }: GlobalPPlotProps) {
   const points = curvePoints(curve ?? []);
   if (points.length === 0) return null;
   const x = (fraction: number) => LEFT + fraction * (RIGHT - LEFT);
   const y = (fraction: number) => BOTTOM - fraction * (BOTTOM - TOP);
-  const line = (list: typeof points) =>
-    list
+  const path = (list: CurvePoint[], close = false) => {
+    if (list.length === 0) return '';
+    const body = list
       .map(
         (point, index) =>
           `${index === 0 ? 'M' : 'L'}${x(point.x).toFixed(1)},${y(point.y).toFixed(1)}`,
       )
       .join(' ');
-  const path = line(points);
+    return close ? `${body} Z` : body;
+  };
+  const curvePath = path(points);
   // The model is drawn from its anchor to the edge, and only when the anchor was
   // measured: with no excursion the Gross–Vitells term is zero and the "model"
   // would be the local p wearing a global label.
-  const model = extrapolatedPoints(u0, meanEuler);
-  const modelPath = line(model);
+  const band = eulerBand(u0, meanEuler, meanEulerStderr);
+  const modelPath = path(band.centre);
+  const bandPath =
+    band.low.length > 0 && band.high.length === band.low.length
+      ? path([...band.low, ...[...band.high].reverse()], true)
+      : '';
   // The curve is sampled on a fixed grid, so the peak is reported at the nearest
   // sample rather than at an interpolated point no toy ever measured.
   const index = Math.min(
@@ -78,6 +98,7 @@ export function GlobalPPlot({
   const marked = points[index]!;
   const peakP = Number(curve?.[index] ?? 1);
   const threshold = y(logFraction(NOMINAL_3_SIGMA));
+  const toyEdge = band.centre.length > 0 && maxToyZ > 0 ? zFraction(maxToyZ) : null;
 
   return (
     <figure className="density global-p">
@@ -85,20 +106,37 @@ export function GlobalPPlot({
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         role="img"
         data-testid="global-p"
-        data-model={model.length > 0 ? 'model' : 'none'}
+        data-model={band.centre.length > 0 ? 'model' : 'none'}
         aria-label={`Global p from ${toys} background-only toys against the scan threshold. The tall line marks this scan's peak at ${peakZ.toFixed(
           2,
         )}σ, where the toys give p = ${peakP.toFixed(
           3,
         )}; the dashed line is the global 3σ rate.${
-          model.length > 0
+          band.centre.length > 0
             ? ` The dashed curve is the Gross–Vitells model from the ${u0.toFixed(
                 2,
-              )}σ anchor, extrapolated beyond where the toys reach.`
+              )}σ anchor, extrapolated beyond where the toys reach.${
+                bandPath
+                  ? ` The shaded band is the anchor's standard error.`
+                  : ''
+              }`
+            : ''
+        }${
+          toyEdge !== null
+            ? ` The dotted line at ${maxToyZ.toFixed(
+                2,
+              )}σ is the largest maximum among the toys, where the measured curve stops.`
             : ''
         }`}
       >
-        {model.length > 0 ? (
+        {bandPath ? (
+          <path
+            className="global-p-band"
+            data-testid="global-p-band"
+            d={bandPath}
+          />
+        ) : null}
+        {band.centre.length > 0 ? (
           <path
             className="global-p-model"
             data-testid="global-p-model"
@@ -115,8 +153,8 @@ export function GlobalPPlot({
         <text x={RIGHT} y={threshold - 5} textAnchor="end">
           3σ global
         </text>
-        <path className="global-p-curve" d={path} />
-        {model.length > 0 ? (
+        <path className="global-p-curve" d={curvePath} />
+        {band.centre.length > 0 ? (
           <text
             className="global-p-model-label"
             x={RIGHT}
@@ -125,6 +163,27 @@ export function GlobalPPlot({
           >
             Gross–Vitells model
           </text>
+        ) : null}
+        {toyEdge !== null ? (
+          <g className="global-p-toys-mark">
+            <line
+              className="global-p-toys"
+              data-testid="global-p-toys"
+              data-max-z={maxToyZ.toFixed(2)}
+              x1={x(toyEdge)}
+              x2={x(toyEdge)}
+              y1={TOP}
+              y2={BOTTOM}
+            />
+            <text
+              className="global-p-toys-label"
+              x={x(toyEdge) - 4}
+              y={TOP + 10}
+              textAnchor="end"
+            >
+              toys stop {maxToyZ.toFixed(2)}σ
+            </text>
+          </g>
         ) : null}
         <line
           className="global-p-marker"
@@ -152,10 +211,17 @@ export function GlobalPPlot({
         search of this grid reaches each threshold when there is nothing to find.
         The vertical line is this scan's peak at {peakZ.toFixed(2)}σ, where it
         reads {peakP.toFixed(3)}; the dashed line is the global 3σ rate.
-        {model.length > 0
+        {band.centre.length > 0
           ? ` The dashed curve is the Gross–Vitells model from the ${u0.toFixed(
               2,
-            )}σ anchor (mean χ = ${meanEuler.toFixed(2)}): above the anchor it adds the excursion regions a toy's maximum alone does not count, and past the toys' reach it is a model, not a measurement.`
+            )}σ anchor (mean χ = ${meanEuler.toFixed(2)}${
+              bandPath ? `, banded by its ±${meanEulerStderr.toFixed(2)} error` : ''
+            }): above the anchor it adds the excursion regions a toy's maximum alone does not count, and past the toys' reach it is a model, not a measurement.`
+          : ''}
+        {toyEdge !== null
+          ? ` The dotted line at ${maxToyZ.toFixed(
+              2,
+            )}σ is where the toys stop — the largest maximum in the null — so everything to its right is extrapolated.`
           : ''}
       </figcaption>
     </figure>

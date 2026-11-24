@@ -244,6 +244,27 @@ ol.stages li {
   font-size: 10px;
 }
 
+/* The model's own width: the anchor is a mean over toys, and the branch moves
+   with it. Filled under the dashed line, so the line still reads as the centre. */
+.global-p-band {
+  fill: var(--muted);
+  fill-opacity: 0.18;
+  stroke: none;
+}
+
+/* Where the measured curve stops. Dotted rather than dashed, because it is not
+   another model: it is the last threshold a toy actually reached. */
+.global-p-toys {
+  stroke: var(--accent);
+  stroke-dasharray: 1 4;
+  stroke-width: 1;
+}
+
+.global-p-toys-label {
+  font-size: 9px;
+  fill: var(--accent);
+}
+
 .global-p-threshold {
   stroke: var(--muted);
   stroke-dasharray: 5 5;

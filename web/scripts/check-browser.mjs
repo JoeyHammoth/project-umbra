@@ -429,12 +429,16 @@ async function main() {
         const path = svg.querySelector('path.global-p-curve');
         const d = path?.getAttribute('d') ?? '';
         const model = svg.querySelector('path.global-p-model')?.getAttribute('d') ?? '';
+        const band = svg.querySelector('path.global-p-band')?.getAttribute('d') ?? '';
+        const toys = svg.querySelector('[data-testid="global-p-toys"]');
         return {
           found: true,
           points: (d.match(/[ML]/g) ?? []).length,
           label: svg.getAttribute('aria-label') ?? '',
           model: svg.getAttribute('data-model'),
           modelPoints: (model.match(/[ML]/g) ?? []).length,
+          bandPoints: (band.match(/[ML]/g) ?? []).length,
+          toysMark: toys ? Number(toys.dataset.maxZ) : 0,
         };
       })()`,
       returnByValue: true,
@@ -461,7 +465,29 @@ async function main() {
           `the page says it draws the Gross–Vitells model but its path has ${String(curveDrawn.modelPoints)} points`,
         );
       }
-    } else if (curveDrawn.model !== 'none' || curveDrawn.modelPoints !== 0) {
+      // As many points as the centre line: a band with half the samples would be
+      // a different curve, not the width of this one.
+      if (curveDrawn.bandPoints !== 2 * curveDrawn.modelPoints) {
+        throw new Error(
+          `the model's band has ${String(curveDrawn.bandPoints)} points for a ${String(curveDrawn.modelPoints)}-point curve`,
+        );
+      }
+      // The measured part of the curve ends at the largest maximum in the null,
+      // and with an excursion at the anchor that maximum is above u0 = 2.5σ.
+      if (!(curveDrawn.toysMark > 2.5 && curveDrawn.toysMark < 6)) {
+        throw new Error(
+          `the page does not mark where the toys stop (max Z ${String(curveDrawn.toysMark)})`,
+        );
+      }
+      if (!curveDrawn.label.includes('largest maximum among the toys')) {
+        throw new Error(`the curve's label does not say where the toys stop: ${curveDrawn.label}`);
+      }
+    } else if (
+      curveDrawn.model !== 'none' ||
+      curveDrawn.modelPoints !== 0 ||
+      curveDrawn.bandPoints !== 0 ||
+      curveDrawn.toysMark !== 0
+    ) {
       throw new Error(
         `the model branch is ${String(curveDrawn.model)} with ${String(curveDrawn.modelPoints)} points`,
       );
@@ -564,7 +590,7 @@ async function main() {
     }
 
     client.close();
-    return `${text} [indexeddb records: ${records}] [canvas 32x32, ${drawn.lit} lit] [scan 32x32, distinct] [lee ${calibrated.toys} toys, p ${calibrated.globalP}] [window moved, ${windowed.changed} bytes] [curve ${curveDrawn.points} points] [model ${curveDrawn.model === 'model' ? `${curveDrawn.modelPoints} points` : 'none'}] [toys 50, ${retuned.ms}]`;
+    return `${text} [indexeddb records: ${records}] [canvas 32x32, ${drawn.lit} lit] [scan 32x32, distinct] [lee ${calibrated.toys} toys, p ${calibrated.globalP}] [window moved, ${windowed.changed} bytes] [curve ${curveDrawn.points} points] [model ${curveDrawn.model === 'model' ? `${curveDrawn.modelPoints} points` : 'none'}] [band ${curveDrawn.bandPoints} points] [toys stop ${curveDrawn.toysMark}σ] [toys 50, ${retuned.ms}]`;
   } finally {
     chrome.kill();
     // A killed Chrome can leave a renderer holding the inherited stderr pipe,

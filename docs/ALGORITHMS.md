@@ -247,61 +247,74 @@ merges results in any order, because toy `t` depends only on `(seed, t)`. A
 worker pool can therefore split the index range and the calibration is
 bit-identical — that is the reproducibility criterion, not a hope.
 
-The extrapolation is Gross–Vitells:
-`p_global(u) = p_local(u) + ⟨χ(u₀)⟩ (u/u₀)^{d−1} e^{−(u²−u₀²)/2}`, with `χ` the
-Euler characteristic of `{Z > u₀}` (`V − E + F` on a 2-D lattice, `V − E + F − C`
-on a 3-D one).
+The extrapolation is Gross–Vitells: `p_global(u) = 1 − exp(−⟨N(u)⟩)` with
+`⟨N(u)⟩ = p_local(u) + ⟨χ(u₀)⟩ e^{−(u²−u₀²)/2}`, and `χ` the Euler characteristic
+of `{Z > u₀}` (`V − E + F` on a 2-D lattice, `V − E + F − C` on a 3-D one).
+
+Both details there are measured rather than assumed, and the first one was wrong
+for a while. The count carries no `(u/u₀)^{d−1}` factor: that is the
+smooth-`d`-field result, and this scan's excursions are strips — each voxel is
+seen by one ray — so their number falls with the local tail. The 10⁵-toy
+campaign measured the factor to over-predict by 1.70× at 3.5σ, 1.56× at 4σ and
+1.80× at 5σ; without it the model and the toys agree to 0.90–1.01× over 3–5σ. And `⟨N⟩` is a rate, not a probability: at `u₀` it is eight regions per
+toy, where the linear form reported `p = 1` across the whole 3–4σ span, while
+`1 − e^{−⟨N⟩}` reads 0.87 against the toys' 0.86 at 3σ.
 
 What the tests actually pin: the Euler characteristic on hand-built lattices
 (square, ring, disjoint blobs, cube, empty); the Poisson sampler against the
 exact pmf bin by bin at `λ = 12` and `λ = 50`, and its mean and variance at
 `λ = 12, 30, 50, 1000`; the `χ` scaling law on 240 synthetic `χ²₁` fields,
-within a factor of two of the prediction; and that the calibration is unchanged
-when its toys are merged in reverse order.
+within a factor of two of the smooth-field prediction; the extrapolation's own
+arithmetic — that `p(5σ)` is `1 − e^{−⟨N⟩}` from the upcrossing count, that the
+`(u/u₀)` factor stays absent, and that `p(3σ)` is a probability near the toys'
+0.86 rather than a clamp at one; and that the calibration is unchanged when its
+toys are merged in reverse order.
 
 `cargo bench -p umbra-stats --bench lee` runs the campaign itself. On the 200²
-scene with 200 toys, the **anchor** matters more than the formula:
+scene with 200 toys, the anchor is no longer a factor-of-three decision:
 
 ```text
                   empirical p(≥ z)   extrapolated      ratio
-u₀ = 1.0σ,  z = 3      0.326             0.934          2.9x
-u₀ = 2.0σ,  z = 3      0.326             0.557          1.7x
-u₀ = 2.5σ,  z = 3      0.326             0.437          1.3x
-u₀ = 2.5σ,  z = 4      0.0124            0.0176         1.4x
+u₀ = 1.0σ,  z = 3      0.326             0.267          0.82x
+u₀ = 2.0σ,  z = 3      0.326             0.310          0.95x
+u₀ = 2.5σ,  z = 3      0.326             0.304          0.93x
+u₀ = 2.5σ,  z = 4      0.0124            0.0109         0.88x
 ```
 
-A `1σ` anchor sits below the regime where the `χ` scaling holds — the excursion
-set there is still dominated by low-threshold structure — and the extrapolation
-then overshoots by a factor of three while looking perfectly plausible. That is
-why `LeeConfig::default()` anchors at `2.5σ`.
+Before the normalisation was fixed this table read 2.9×, 1.7×, 1.3× and 1.4×:
+the `(u/u₀)` factor grows with the distance from the anchor, so anchoring low
+turned a modelling error into an anchor-sensitivity story. With the factor gone,
+`1σ` and `2.5σ` agree with the toys to better than 20%, and the default stays at
+`2.5σ` for statistics rather than correctness: a full campaign needs thousands
+of excursions to average, and the 1000² scene has 8.1 per toy there.
 
-The published campaign — `1000²` voxels, `10⁴` toys, seed `0xc0ffee`, 832 s on
-16 threads, report at [`docs/calibration/lee-2d.md`](calibration/lee-2d.md) — moves
-the picture:
+The published campaign is `1000²` voxels, `10⁵` toys, seed `0xc0ffee`, 4149.9 s
+on 4 threads and mean `χ̄(u₀) = 8.119 ± 0.010`, reported at
+[`docs/calibration/lee-2d-1e5.md`](calibration/lee-2d-1e5.md). Against that
+campaign's own tail the corrected extrapolation reads:
 
 ```text
-        empirical global p   extrapolated   ratio   toys above
-z = 3         0.863              1.000      1.16       8628
-z = 4         0.0655             0.0991     1.51        655
-z = 4.5       0.00855            0.0133     1.56         85
-z = 5         0.00105            0.00138    1.31         10
+        empirical global p   extrapolated   ratio
+z = 3         0.8644             0.8718     1.01
+z = 3.5       0.3339             0.3324     1.00
+z = 4         0.06343            0.06006    0.95
+z = 4.5       0.007845           0.007374   0.94
+z = 5         0.000765           0.000687   0.90
 ```
 
-At `3σ` the extrapolation is 16% high, inside the spec's 20%; at `4–4.5σ` it is
-50% high. The honest global `3σ` threshold — where the empirical rate reaches
-the nominal `1.35 × 10⁻³` — is `z = 4.95`, not `3.0`: on this scene a local `3σ`
-peak is **639×** more common than a global one, which is the whole point of the
-layer. The extrapolated curve crosses the nominal rate at essentially the same
-place (`1.38 × 10⁻³` at `z = 5`), so it is usable where it is most needed.
+The honest global `3σ` threshold — where the empirical rate reaches the nominal
+`1.35 × 10⁻³` — is `z = 4.85`, not `3.0`: on this scene a local `3σ` peak is
+**640×** more common than a global one, which is the whole point of the layer.
+The model's crossing is `z = 4.86`, 0.01σ from the toys'.
 
-What it is not: certified. The Monte Carlo estimate at the crossing rests on 10
-exceedances (±32%), and the `4–4.5σ` agreement is 1.5×, not 1.2×. That is why
-the campaign runs weekly as a CI artifact rather than the criterion being
-declared met once.
+What it is not: certified at the far tail. The `z = 5` row rests on 76
+exceedances in the campaign and the model is 10% under them, so a `5σ` global
+`p` here is a model informed by a measurement rather than a measurement. The
+campaign runs weekly as a CI artifact for that reason.
 
-What they do **not** pin is the spec's calibration target: the global `p` at
-`3σ` within ±20% of nominal over `10⁴` toys. That is a campaign, not a unit
-test, and it is the reason #15 is open.
+What no unit test can pin is the spec's calibration target itself — the global
+rate at the model's `3σ` threshold, with the Wilson interval its exceedances
+imply. That is the campaign's verdict, not the suite's, and #15 tracks it.
 
 ## Why these, and how they relate
 

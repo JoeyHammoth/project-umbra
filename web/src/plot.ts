@@ -71,21 +71,26 @@ function erfc(x: number): number {
 }
 
 /**
- * Global `p` from the Euler anchor: the Gross–Vitells scaling the Rust core
- * uses (`umbra_stats::lee::extrapolated_global_p`), for a `dim`-dimensional
- * search. At or below the anchor nothing is extrapolated and the local `p` is
- * returned, which is the one place the two differ.
+ * Global `p` from the Euler anchor: the Gross–Vitells upcrossing law the Rust
+ * core uses (`umbra_stats::lee::extrapolated_global_p`).
+ *
+ * `⟨N⟩ = p_local + meanEuler·exp(−(z² − u₀²)/2)` counts the excursion regions,
+ * and `1 − e^{−⟨N⟩}` is the chance that some region is above `z`. Neither part
+ * is decoration: there is no `(z/u₀)^{d−1}` factor, because these excursions are
+ * strips rather than smooth `d`-D blobs and their count falls with the local
+ * tail; and the count is turned into a probability, because at the anchor it is
+ * eight regions per toy, where the linear form reported `p = 1`.
+ *
+ * At or below the anchor nothing is extrapolated and the local `p` is returned,
+ * which is the one place the two differ.
  */
-export function modelGlobalP(z: number, u0: number, meanEuler: number, dim = 2): number {
+export function modelGlobalP(z: number, u0: number, meanEuler: number): number {
   const local = normalTail(z);
   if (!(u0 > 0) || !(meanEuler > 0) || !Number.isFinite(z) || z <= u0) {
     return Math.min(1, local);
   }
-  const extra =
-    meanEuler *
-    Math.pow(z / u0, Math.max(0, dim - 1)) *
-    Math.exp(-(z * z - u0 * u0) / 2);
-  return Math.min(1, Math.max(local, local + extra));
+  const mean = local + meanEuler * Math.exp(-(z * z - u0 * u0) / 2);
+  return Math.min(1, Math.max(local, 1 - Math.exp(-mean)));
 }
 
 /**
@@ -94,21 +99,58 @@ export function modelGlobalP(z: number, u0: number, meanEuler: number, dim = 2):
  * Empty when there is no anchor to stand on: zero measured Euler characteristic
  * means the toys never formed an excursion there, and drawing a model from that
  * would be drawing the local `p` under a global label.
+ *
+ * One step above the anchor, not on it: at `u0` the model returns the local `p`,
+ * and just above it the excursion term arrives at full size, so including the
+ * anchor would draw a vertical jump that no data has. The empirical curve is the
+ * one measured at the anchor.
  */
-export function extrapolatedPoints(u0: number, meanEuler: number, dim = 2): CurvePoint[] {
+export function extrapolatedPoints(u0: number, meanEuler: number): CurvePoint[] {
   if (!(u0 > 0) || !(u0 < Z_AXIS) || !(meanEuler > 0)) return [];
+  return modelCurve(u0, meanEuler);
+}
+
+/** The same curve for any `χ ≥ 0`, so a band's lower edge can reach zero. */
+function modelCurve(u0: number, meanEuler: number): CurvePoint[] {
   const points: CurvePoint[] = [];
-  // One step above the anchor, not on it: at `u0` the model returns the local
-  // `p`, and just above it the excursion term arrives at full size, so including
-  // the anchor would draw a vertical jump that no data has. The empirical curve
-  // is the one measured at the anchor.
   for (let z = u0 + MODEL_STEP; z <= Z_AXIS + 1e-9; z += MODEL_STEP) {
     points.push({
       x: zFraction(z),
-      y: logFraction(modelGlobalP(z, u0, meanEuler, dim)),
+      y: logFraction(modelGlobalP(z, u0, meanEuler)),
     });
   }
   return points;
+}
+
+/** The extrapolation with the anchor's own standard error drawn around it. */
+export interface EulerBand {
+  /** The model at the measured `⟨χ⟩`. */
+  centre: CurvePoint[];
+  /** The model at `⟨χ⟩ − stderr`; empty when there is no band to draw. */
+  low: CurvePoint[];
+  /** The model at `⟨χ⟩ + stderr`. */
+  high: CurvePoint[];
+}
+
+/**
+ * The band `⟨χ⟩`'s standard error puts around the extrapolation.
+ *
+ * `⟨χ⟩` is a mean over toys, so it has a width, and the model inherits it: the
+ * whole branch moves by `exp(−Δz²/2)` times the anchor's error. Drawing only the
+ * centre line claims a normalisation the campaign did not measure — on 200 toys
+ * the error is tens of percent of the anchor, which at 5σ is still a visible
+ * band. Empty edges mean there is no band: no anchor, or no measured error.
+ */
+export function eulerBand(u0: number, meanEuler: number, stderr: number): EulerBand {
+  const centre = extrapolatedPoints(u0, meanEuler);
+  if (centre.length === 0 || !(stderr > 0) || !(u0 < Z_AXIS)) {
+    return { centre, low: [], high: [] };
+  }
+  return {
+    centre,
+    low: modelCurve(u0, Math.max(0, meanEuler - stderr)),
+    high: modelCurve(u0, meanEuler + stderr),
+  };
 }
 
 /** Where a `Z` sits on that axis, clamped to it. */

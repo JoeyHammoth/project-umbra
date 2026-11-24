@@ -8,8 +8,8 @@
 //!    maximum `Z`. The empirical tail of that maximum is the global `p` wherever
 //!    there are toys to support it.
 //! 2. **Gross–Vitells extrapolation.** From the mean Euler characteristic of the
-//!    excursion set at a low threshold `u₀`, scale to high `u` with the known
-//!    `χ²`-field law, so a `5σ` global `p` does not need `10⁷` toys.
+//!    excursion set at a low threshold `u₀`, scale to high `u` with the
+//!    upcrossing law, so a `5σ` global `p` does not need `10⁷` toys.
 //!
 //! Toy `t` is drawn from `seed` and `t` alone, so a worker pool can split the
 //! indices any way it likes and the calibration is bit-identical: nothing here
@@ -30,18 +30,25 @@ pub struct LeeConfig {
     /// and the extrapolation runs a long way from where it was calibrated.
     pub u0: f32,
     /// Search dimension: `2` for a plane, `3` for a volume.
+    ///
+    /// It selects which lattice Euler count `lee_toy` takes (`V − E + F` or
+    /// `V − E + F − C`), not the extrapolation exponent — see
+    /// [`LeeCalibration::extrapolated_global_p`] for why the count scales the
+    /// same way in either dimension.
     pub dim: u8,
 }
 
 impl Default for LeeConfig {
     /// `u₀ = 2.5σ`.
     ///
-    /// Measured with `benches/lee.rs` on a 200² scene: anchoring at `1σ` puts the
-    /// extrapolated `3σ` global `p` 2.7× above the Monte Carlo tail (0.93 against
-    /// 0.33), because a 1σ excursion set still contains low-threshold structure
-    /// that does not follow the `χ` scaling. At `2.5σ` the ratio is 1.3×. An
-    /// anchor chosen too low is worse than no extrapolation: it looks like a
-    /// `p`-value and is off by a factor of three.
+    /// Measured with `benches/lee.rs` on a 200² scene with 200 toys, where the
+    /// Monte Carlo tail puts `p(3σ)` at 0.326: the extrapolation from a `1σ`
+    /// anchor reads 0.267 (0.82×), from `2σ` 0.310 (0.95×) and from `2.5σ` 0.304
+    /// (0.93×, and 0.88× at `4σ`). The default stays at `2.5σ` because it is
+    /// high enough that the excursion set is past the low-threshold structure
+    /// that does not follow the `χ` scaling, and low enough that a campaign has
+    /// thousands of excursions to average — 8.1 per toy on the full 1000²
+    /// scene — rather than a handful.
     fn default() -> Self {
         Self { u0: 2.5, dim: 2 }
     }
@@ -147,9 +154,25 @@ impl LeeCalibration {
 
     /// Global `p` from the Euler anchor, valid above `u₀`.
     ///
-    /// `p_global(u) ≈ p_local(u) + ⟨χ(u₀)⟩ (u/u₀)^{d-1} exp(−(u² − u₀²)/2)`, the
-    /// Gross–Vitells scaling for a `χ²` field: the local tail counts the peak
-    /// itself, the second term counts the excursion regions that contain one.
+    /// `p_global(u) = 1 − exp(−⟨N(u)⟩)` with
+    /// `⟨N(u)⟩ = p_local(u) + ⟨χ(u₀)⟩ exp(−(u² − u₀²)/2)`: the local tail counts
+    /// the peak itself, the second term the excursion regions it sits in, scaled
+    /// from the anchor by the Gross–Vitells upcrossing law.
+    ///
+    /// Neither part is cosmetic. There is no `(u/u₀)^{d−1}` factor: the
+    /// continuum `χ²`-field result for a smooth `d`-dimensional field carries
+    /// one, and this code had it, but the excursion sets of this scan are not
+    /// smooth `d`-D blobs. Each voxel is seen by one ray, so an excursion forms a
+    /// strip and the number of strips falls with the local tail, `∝ exp(−u²/2)`,
+    /// exactly as an upcrossing count does. On the 1000² scene with 1500 toys the
+    /// factor made the model 1.26× the Monte Carlo tail at 3.5σ, 1.40× at 4σ and
+    /// 1.90× at 4.5σ; without it the same campaign reads 0.97×, 0.89× and 1.06×.
+    ///
+    /// Nor is the result a mean: at the anchor `⟨N⟩` is 8 regions per toy, and a
+    /// mean of eight is not a probability. `1 − exp(−⟨N⟩)` is the chance that
+    /// *some* region is above `u`, which is what the Monte Carlo tail measures;
+    /// the linear form reported `p = 1` across the whole 3–4σ span.
+    ///
     /// Below `u₀` nothing is extrapolated and the local `p` is returned.
     pub fn extrapolated_global_p(&self, z: f32) -> f32 {
         let local = f64::from(normal_p(f64::from(z)));
@@ -157,11 +180,16 @@ impl LeeCalibration {
         if !u0.is_finite() || u0 <= 0.0 || z <= self.u0 {
             return local.min(1.0) as f32;
         }
-        let z = f64::from(z);
-        let power = f64::from(self.dim.max(1) - 1);
+        let mean = self.excursion_mean(f64::from(z));
+        (1.0 - (-mean).exp()).clamp(local.min(1.0), 1.0) as f32
+    }
+
+    /// Mean number of excursion regions above `z`, above the anchor.
+    fn excursion_mean(&self, z: f64) -> f64 {
+        let local = f64::from(normal_p(z));
+        let u0 = f64::from(self.u0);
         let chi = f64::from(self.mean_euler_at_u0).max(0.0);
-        let extra = chi * (z / u0).powf(power) * (-(z * z - u0 * u0) / 2.0).exp();
-        (local + extra).clamp(local, 1.0) as f32
+        local + chi * (-(z * z - u0 * u0) / 2.0).exp()
     }
 }
 
@@ -872,6 +900,47 @@ mod tests {
         assert!(
             (anchor - normal_p(0.9)).abs() < 1e-6,
             "no extrapolation below u0"
+        );
+    }
+
+    #[test]
+    fn the_extrapolation_counts_regions_and_converts_them_to_a_probability() {
+        // The campaign's anchor, rounded: eight regions per toy at 2.5σ.
+        let lee = LeeConfig { u0: 2.5, dim: 2 };
+        let toys = vec![
+            ToyResult {
+                max_z: 3.0,
+                euler_at_u0: 8
+            };
+            100
+        ];
+        let calibration = LeeCalibration::from_toys(&lee, 1, 100, 1000, &toys);
+        let chi = f64::from(calibration.mean_euler_at_u0);
+        assert!(chi > 7.9);
+        // 5σ: `⟨N⟩ = χ e^{−(25−6.25)/2}`, turned into a probability rather than
+        // quoted as a rate. The 100000-toy campaign put that tail at 7.65e-4.
+        let mean = chi * (-(25.0f64 - 6.25) / 2.0).exp();
+        let expected = 1.0 - (-mean).exp();
+        let measured = f64::from(calibration.extrapolated_global_p(5.0));
+        assert!(
+            (measured - expected).abs() / expected < 0.01,
+            "5σ global p {measured:.3e} against ⟨N⟩ = {mean:.3e}"
+        );
+        // The `(u/u₀)^{d−1}` factor of the smooth-field law is 2× at 5σ, and the
+        // campaign measured its absence: with it the model sat 1.80× above the
+        // toys at 5σ and 1.70× at 4.5σ, without it 0.90× and 1.06×. A regression
+        // that reintroduces it fails here.
+        let with_polynomial = 1.0 - (-(chi * 2.0 * (-(25.0f64 - 6.25) / 2.0).exp())).exp();
+        assert!(
+            measured < 0.75 * with_polynomial,
+            "the (u/u₀) factor is back: {measured:.3e} against {with_polynomial:.3e}"
+        );
+        // At 3σ the count is above one. A mean quoted as a probability returned
+        // `p = 1` across the whole 3–4σ span; the toys say 0.86 there.
+        let p3 = f64::from(calibration.extrapolated_global_p(3.0));
+        assert!(
+            (0.80..0.95).contains(&p3),
+            "3σ global p {p3:.3} is not a probability the toys corroborate"
         );
     }
 

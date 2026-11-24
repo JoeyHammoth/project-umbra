@@ -70,6 +70,8 @@ type BuildState =
         toysAboveU0: number;
         /** Mean Euler characteristic at the anchor, for the drawn model. */
         meanEulerAtU0: number;
+        /** Its standard error, drawn as a band around that model. */
+        eulerStderr: number;
         /** Global `p` at 0, 0.05, …, 6σ, for the drawn curve. */
         curve: Float32Array;
         /** Round trip of the calibration, measured here because wasm has no clock. */
@@ -267,6 +269,7 @@ export function App() {
               zAt3Sigma: lee.zAt3Sigma as number | null,
               toysAboveU0: lee.toysAboveU0 as number,
               meanEulerAtU0: lee.meanEulerAtU0 as number,
+              eulerStderr: lee.eulerStderr as number,
               curve: lee.globalPValues as Float32Array,
               ms: leeMs,
             },
@@ -327,7 +330,9 @@ export function App() {
           leePeakZ={shown?.lee.peakZ ?? 0}
           leeToys={shown?.lee.toys ?? 0}
           leeMeanEuler={shown?.lee.meanEulerAtU0 ?? 0}
+          leeEulerStderr={shown?.lee.eulerStderr ?? 0}
           leeU0={LEE_U0}
+          leeMaxZ={shown?.lee.maxToyZ ?? 0}
         />
         {shown ? (
           <p
@@ -348,7 +353,7 @@ export function App() {
             nothing about a search of {shown.cols} positions.{' '}
             {shown.lee.zAt3Sigma === null
               ? `No toy reached the ${LEE_U0}σ Euler anchor, so no extrapolated 3σ threshold is quoted.`
-              : `Extrapolated from the ${shown.lee.toysAboveU0} toys above ${LEE_U0}σ (mean χ = ${shown.lee.meanEulerAtU0.toFixed(2)}), a global 3σ would need ${shown.lee.zAt3Sigma.toFixed(2)}σ.`}{' '}
+              : `Extrapolated from the ${shown.lee.toysAboveU0} toys above ${LEE_U0}σ (mean χ = ${shown.lee.meanEulerAtU0.toFixed(2)} ± ${shown.lee.eulerStderr.toFixed(2)}), a global 3σ would need ${shown.lee.zAt3Sigma.toFixed(2)}σ.`}{' '}
             The {shown.lee.toys} toys took {Math.round(shown.lee.ms)} ms here, round trip.
           </p>
         ) : null}

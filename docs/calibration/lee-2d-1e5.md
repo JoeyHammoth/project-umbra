@@ -1,5 +1,13 @@
 # LEE calibration — 2-D, 100000 toys
 
+> **Editor's note (2026-11-25).** This is the campaign artifact as generated,
+> and it is the record of why the model failed: the `extrapolated global p`
+> column, the model threshold and the `FAIL` are the extrapolation *before* the
+> normalisation was fixed. The toys themselves are still the reference tail; the
+> corrected model's agreement with this same curve is in
+> [`docs/ALGORITHMS.md`](../ALGORITHMS.md) §A6, and the re-run that checks the
+> correction is [`lee-2d-1e4-fixed.md`](lee-2d-1e4-fixed.md).
+
 | | |
 |---|---|
 | Scene | 1000² voxels, 1000 rays |

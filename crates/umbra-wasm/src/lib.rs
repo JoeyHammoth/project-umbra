@@ -198,6 +198,8 @@ pub struct LeeOutcome {
     /// being re-derived in JavaScript, where it could quietly disagree with the
     /// threshold computed here from the same number.
     pub mean_euler_at_u0: f32,
+    /// Standard error of that mean, which the drawn extrapolation bands by.
+    pub euler_stderr: f32,
     /// Global `p` at 0, 0.05, …, 6 sigma.
     pub curve: Vec<f32>,
 }
@@ -805,6 +807,7 @@ impl Core {
             z_at_3_sigma,
             toys_above_u0: calibration.toys_above_u0,
             mean_euler_at_u0: calibration.mean_euler_at_u0,
+            euler_stderr: calibration.euler_stderr,
             curve,
         })
     }
@@ -1268,6 +1271,7 @@ pub struct LeeResult {
     z_at_3_sigma: Option<f32>,
     toys_above_u0: u32,
     mean_euler_at_u0: f32,
+    euler_stderr: f32,
 }
 
 impl From<LeeOutcome> for LeeResult {
@@ -1282,6 +1286,7 @@ impl From<LeeOutcome> for LeeResult {
             z_at_3_sigma: outcome.z_at_3_sigma,
             toys_above_u0: outcome.toys_above_u0,
             mean_euler_at_u0: outcome.mean_euler_at_u0,
+            euler_stderr: outcome.euler_stderr,
         }
     }
 }
@@ -1322,6 +1327,13 @@ impl LeeResult {
     #[wasm_bindgen(getter, js_name = meanEulerAtU0)]
     pub fn mean_euler_at_u0(&self) -> f32 {
         self.mean_euler_at_u0
+    }
+
+    /// Standard error of that mean: the width of the anchor's measurement, which
+    /// the page draws as a band rather than claiming a normalisation without one.
+    #[wasm_bindgen(getter, js_name = eulerStderr)]
+    pub fn euler_stderr(&self) -> f32 {
+        self.euler_stderr
     }
 
     /// The largest maximum in the null.

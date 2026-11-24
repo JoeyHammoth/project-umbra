@@ -181,6 +181,14 @@ fn main() {
         calibration.quantile(0.99),
         calibration.quantile(0.999)
     );
+    // Which law produced the numbers, stated where the numbers are: a reader
+    // comparing the extrapolation against the tail needs to know that the
+    // regions are counted as an upcrossing count and turned into a probability
+    // rather than quoted as a rate.
+    let _ = writeln!(
+        report,
+        "The extrapolation is Gross–Vitells: `⟨N(u)⟩ = p_local(u) + ⟨χ(u₀)⟩ e^{{−(u²−u₀²)/2}}`,\nreported as `p = 1 − e^{{−⟨N⟩}}` because `⟨N⟩` is a region count, not a probability.\n"
+    );
     let _ = writeln!(
         report,
         "| z | local p | empirical global p | extrapolated global p | ratio | toys above |\n|---|---|---|---|---|---|"
