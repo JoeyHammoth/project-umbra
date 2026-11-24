@@ -7,15 +7,6 @@ import type { BrowserCompute, CacheKind } from './compute/compute';
 import { PIPELINE_STAGES } from './compute/protocol';
 import sceneJson from './scenes/default.json?raw';
 
-/**
- * Voxels per row, which is what a canvas needs and `BUILD_SYSTEM` does not report.
- *
- * The operator's summary is rays × voxels; the grid's aspect is in the scene
- * document, which is also the file the core rasterised, so the two cannot
- * disagree about how the field is laid out.
- */
-const GRID_COLUMNS = (JSON.parse(sceneJson) as { grid: { n: [number, number] } }).grid.n[0];
-
 /** The exposure the page opens on, in seconds. */
 const DEFAULT_EXPOSURE = 3600;
 const MIN_EXPOSURE = 600;
@@ -33,6 +24,8 @@ type BuildState =
       status: 'ok';
       rows: number;
       cols: number;
+      /** Voxels per row, as the rasteriser laid them out. */
+      grid: number;
       nnz: number;
       lambda: ArrayBufferView;
       counts: Uint32Array;
@@ -194,6 +187,7 @@ export function App() {
             status: 'ok',
             rows: build.rows,
             cols: build.cols,
+            grid: build.grid[0],
             nnz: build.nnz,
             lambda: expected.lambda,
             counts: counts.counts,
@@ -237,10 +231,10 @@ export function App() {
         <h2 id="reconstruction">Reconstruction</h2>
         <DensityView
           density={shown?.density ?? null}
-          width={GRID_COLUMNS}
+          width={shown?.grid ?? 1}
           summary={
             shown
-              ? `Reconstructed density on a ${GRID_COLUMNS} × ${shown.cols / GRID_COLUMNS} voxel grid, A2 after ${shown.steps} steps at ${formatExposure(exposure)}.`
+              ? `Reconstructed density on a ${shown.grid} × ${shown.cols / shown.grid} voxel grid, A2 after ${shown.steps} steps at ${formatExposure(exposure)}.`
               : 'Waiting for the reconstruction…'
           }
         />

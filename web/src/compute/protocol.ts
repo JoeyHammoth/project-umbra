@@ -71,7 +71,18 @@ export interface Payloads {
 /** Results keyed by task. */
 export interface Results {
   LOAD_TABLES: { tableVersion: string; bytes: number };
-  BUILD_SYSTEM: { systemKey: string; rows: number; cols: number; nnz: number };
+  BUILD_SYSTEM: {
+    systemKey: string;
+    rows: number;
+    cols: number;
+    nnz: number;
+    /**
+     * Voxels per axis. `cols` is the total, which a renderer can size a buffer
+     * with but not lay out; the layout comes from the rasteriser that built the
+     * operator rather than from a second parse of the scene in JavaScript.
+     */
+    grid: [number, number];
+  };
   EXPECTED: { lambda: ArrayBufferView };
   SIMULATE: { counts: Uint32Array };
   RECON: { density: ArrayBufferView; iterations: number; objective: number | null };

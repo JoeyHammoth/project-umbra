@@ -38,7 +38,7 @@ import type {
 } from './protocol.ts';
 
 /** Version of the compute contract this bus speaks. */
-export const BUS_API_VERSION = '0.3.0';
+export const BUS_API_VERSION = '0.4.0';
 
 /** A stale cached `.wasm` or a mismatched client: always fatal, never ignored. */
 export class ApiVersionMismatch extends Error {

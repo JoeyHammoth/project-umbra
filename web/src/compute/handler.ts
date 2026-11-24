@@ -13,7 +13,7 @@
  * `node --test`, with no browser and no WASM runtime.
  */
 
-import type { PayloadOf, Results, TaskEvent, TaskRequest } from './protocol.ts';
+import type { PayloadOf, TaskEvent, TaskRequest } from './protocol.ts';
 
 /**
  * The `Z` field a scan returns, before the handler transfers it.
@@ -33,10 +33,26 @@ export interface ScanField {
   correlateMs: number;
 }
 
+/**
+ * What the core reports about an operator it assembled.
+ *
+ * `grid` is an `ArrayLike` rather than the protocol's tuple because that is what
+ * the boundary actually yields: a wasm getter returning `Vec<u32>` arrives as a
+ * `Uint32Array`. Widening it here lets `worker.ts` pass the real class without a
+ * cast, and `handleTask` is where it becomes the pair the protocol promises.
+ */
+export interface BuildSummaryOut {
+  systemKey: string;
+  rows: number;
+  cols: number;
+  nnz: number;
+  grid: ArrayLike<number>;
+}
+
 /** The façade, narrowed to the tasks a worker runs. */
 export interface ComputeCore {
   /** Assembles the path-length operator; the scene crosses as the §8.1 document. */
-  buildSystem(systemKey: string, sceneJson: string): Results['BUILD_SYSTEM'];
+  buildSystem(systemKey: string, sceneJson: string): BuildSummaryOut;
   /** λ for a density field, keyed so `SIMULATE` can reuse the per-second rates. */
   expected(
     systemKey: string,
@@ -142,6 +158,10 @@ export function handleTask(core: ComputeCore, request: TaskRequest): TaskEvent {
             rows: summary.rows,
             cols: summary.cols,
             nnz: summary.nnz,
+            // The wasm getter hands back a Uint32Array; the protocol promises a
+            // two-entry pair, so the shape is fixed here rather than at every
+            // consumer.
+            grid: [summary.grid[0]!, summary.grid[1]!],
           },
         };
       }
