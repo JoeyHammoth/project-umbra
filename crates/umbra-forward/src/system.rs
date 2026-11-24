@@ -1,6 +1,7 @@
 //! The discretised experiment.
 
 use umbra_core::{Csr, GridAny, LinearOperator};
+use umbra_physics::Pose;
 
 /// One ray cell: a detector, a direction and the acceptance factor that scales
 /// its expected counts.
@@ -29,6 +30,15 @@ pub struct System {
     pub rays: Vec<RayCell>,
     /// The voxel grid the columns refer to.
     pub grid: GridAny,
+    /// Detector poses, indexed by [`RayCell::det`].
+    ///
+    /// Carried because the useful question about a voxel is often *which rays
+    /// could reach it*, and a direction alone cannot answer that: the same angle
+    /// from two positions sees a different part of the grid. Empty means the
+    /// operator was built without a scene — every fixture that hand-writes `L`
+    /// does — so a caller that needs a pose has to handle its absence rather
+    /// than index blindly.
+    pub poses: Vec<Pose>,
 }
 
 impl LinearOperator for System {
@@ -60,6 +70,14 @@ impl System {
     /// Number of voxels (columns of `L`).
     pub fn voxel_count(&self) -> usize {
         self.grid.cell_count()
+    }
+
+    /// The pose of detector `det`, when this system carries poses.
+    ///
+    /// `None` is a real answer, not an error: an operator assembled from a
+    /// hand-written `L` has geometry and no experiment.
+    pub fn detector_pose(&self, det: u16) -> Option<&Pose> {
+        self.poses.get(usize::from(det))
     }
 
     /// Opacity `X = L ρ`, in g cm⁻², for a density field in g cm⁻³.
@@ -111,6 +129,7 @@ mod tests {
                 },
             ],
             grid: GridAny::Two(grid),
+            poses: Vec::new(),
         };
         let rho = [2.0f32, 2.0, 2.0];
         assert_eq!(system.opacity(&rho), vec![300.0, 300.0]);

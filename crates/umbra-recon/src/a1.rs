@@ -449,6 +449,7 @@ mod tests {
                 })
                 .collect(),
             grid: GridAny::Two(Grid2::new([rows as u32, 1], [0.0, 0.0], 1.0)),
+            poses: Vec::new(),
         }
     }
 
