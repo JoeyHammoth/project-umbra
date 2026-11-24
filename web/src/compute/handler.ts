@@ -86,6 +86,38 @@ export interface ComputeCore {
    * in voxels; the field and the amplitude map both come back for transferring.
    */
   scan(countsKey: string, scalesVoxels: number[], profileNuisances: boolean): ScanField;
+  /**
+   * The look-elsewhere calibration for stored counts: background-only toys drawn
+   * from the same λ⁰ the data was tested against, scanned with the same bank.
+   */
+  leeCalib(
+    countsKey: string,
+    scalesVoxels: number[],
+    toys: number,
+    u0: number,
+  ): LeeCalibrationOut;
+}
+
+/**
+ * The calibration before the handler transfers its curve.
+ *
+ * `Results.LEE_CALIB` widens the curve to `ArrayBufferView` because the contract
+ * cannot promise which typed array arrives; here it is known to be `f32`,
+ * because the core allocates it.
+ */
+export interface LeeCalibrationOut {
+  globalPValues: Float32Array;
+  peakZ: number;
+  globalPAtPeak: number;
+  toysAtOrAbovePeak: number;
+  toys: number;
+  maxToyZ: number;
+  /**
+   * `undefined` at the boundary, because a wasm `Option<f32>` getter comes back
+   * absent rather than null; the handler normalises it to the protocol's `null`.
+   */
+  zAt3Sigma: number | null | undefined;
+  toysAboveU0: number;
 }
 
 /**
@@ -252,6 +284,35 @@ export function handleTask(core: ComputeCore, request: TaskRequest): TaskEvent {
             correlateMs: outcome.correlateMs,
           },
           transfer: [transferable(z), transferable(alphaHat)],
+        };
+      }
+      case 'LEE_CALIB': {
+        const payload = request.payload as PayloadOf<'LEE_CALIB'>;
+        const outcome = core.leeCalib(
+          payload.countsKey,
+          payload.scalesVoxels,
+          payload.toys,
+          payload.u0,
+        );
+        // Read once, and read explicitly: a wasm-bindgen class exposes these as
+        // prototype getters with no own properties, so `{ ...outcome }` would
+        // copy the curve and drop every scalar — which is how the page ended up
+        // calling `toFixed` on `undefined`.
+        const globalPValues = outcome.globalPValues;
+        return {
+          id,
+          type: 'result',
+          result: {
+            globalPValues,
+            peakZ: outcome.peakZ,
+            globalPAtPeak: outcome.globalPAtPeak,
+            toysAtOrAbovePeak: outcome.toysAtOrAbovePeak,
+            toys: outcome.toys,
+            maxToyZ: outcome.maxToyZ,
+            zAt3Sigma: outcome.zAt3Sigma ?? null,
+            toysAboveU0: outcome.toysAboveU0,
+          },
+          transfer: [transferable(globalPValues)],
         };
       }
       default:

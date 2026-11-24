@@ -100,6 +100,23 @@ class FakeCore implements ComputeCore {
     };
   }
 
+  leeCurve = new Float32Array([0.5, 0.25, 0.1]);
+
+  leeCalib(countsKey: string, scalesVoxels: number[], toys: number, u0: number) {
+    this.throwIfFailing();
+    this.calls.push(`lee ${countsKey} ${scalesVoxels.join(',')} ${toys} ${u0}`);
+    return {
+      globalPValues: this.leeCurve,
+      peakZ: 4.25,
+      globalPAtPeak: 0.1,
+      toysAtOrAbovePeak: 10,
+      toys,
+      maxToyZ: 4.9,
+      zAt3Sigma: 4.75,
+      toysAboveU0: 30,
+    };
+  }
+
   private throwIfFailing() {
     if (this.failure !== null) throw this.failure;
   }
@@ -280,16 +297,49 @@ test('scan transfers the field and the amplitude map, and reports the peak', () 
   assert.deepEqual(core.calls, ['scan counts-key 1,2 false']);
 });
 
+test('the look-elsewhere calibration transfers its curve and keeps the scan it corrects', () => {
+  const core = new FakeCore();
+  const event = handleTask(
+    core,
+    request('LEE_CALIB', { countsKey: 'counts-key', scalesVoxels: [1, 2], toys: 200, u0: 2.5 }),
+  );
+
+  const { result, transfer } = asResult<{
+    globalPValues: Float32Array;
+    peakZ: number;
+    globalPAtPeak: number;
+    toysAtOrAbovePeak: number;
+    toys: number;
+    maxToyZ: number;
+    zAt3Sigma: number | null;
+    toysAboveU0: number;
+  }>(event);
+  assert.equal(result.globalPValues, core.leeCurve, 'the curve is handed over, not rebuilt');
+  assert.deepEqual(
+    transfer,
+    [core.leeCurve.buffer],
+    'the list names the curve’s own buffer',
+  );
+  assert.equal(result.peakZ, 4.25);
+  assert.equal(result.globalPAtPeak, 0.1);
+  assert.equal(result.toysAtOrAbovePeak, 10);
+  assert.equal(result.toys, 200);
+  assert.equal(result.maxToyZ, 4.9);
+  assert.equal(result.zAt3Sigma, 4.75);
+  assert.equal(result.toysAboveU0, 30);
+  assert.deepEqual(core.calls, ['lee counts-key 1,2 200 2.5']);
+});
+
 test('a stage still without an entry point is an error event, not a thrown exception', () => {
   const core = new FakeCore();
   const event = handleTask(
     core,
-    request('LEE_CALIB', { scanKey: 'scan', toys: 10, u0: 3 }),
+    request('EVENT_MC', { sceneKey: 'scene', seed: '1', tracks: 4 }),
   );
 
   const { code, message } = asError(event);
   assert.equal(code, 'unimplemented');
-  assert.match(message, /LEE_CALIB/);
+  assert.match(message, /EVENT_MC/);
   assert.deepEqual(core.calls, [], 'the core is never called');
 });
 

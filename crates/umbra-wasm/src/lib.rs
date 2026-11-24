@@ -26,7 +26,7 @@ use umbra_physics::{generate_default, Fidelity, FluxTable};
 use umbra_recon::{
     A1Config, A2Config, Control, PoissonMap, Problem, Solver, Start, TransmissionEm,
 };
-use umbra_stats::{scan_with_map, ScanConfig, ScanProblem};
+use umbra_stats::{lee_calibrate_with, scan_with_map, LeeConfig, ScanConfig, ScanProblem};
 use wasm_bindgen::prelude::*;
 
 /// Version of the compute-core API contract.
@@ -57,6 +57,31 @@ const MAX_RECON_ITERATIONS: u32 = 10_000;
 /// past the range the default scene can resolve, and a bound keeps a malformed
 /// request from turning a worker into a space heater.
 const MAX_SCAN_SCALES: usize = 8;
+
+/// The largest toy campaign one browser `LEE_CALIB` will run.
+///
+/// The page runs it in one worker, with no threads to split it across, and the
+/// result has to arrive while the user is still looking at the picture. Two
+/// thousand toys on a 32 x 32 grid is already a noticeable wait. The campaign
+/// that decides M3 — 10^5 toys on 10^6 voxels — is a bench and a CI job (§10.3),
+/// not this: what the browser needs is enough toys to say whether its own peak
+/// is ordinary, not enough to pin a rate to a percent.
+const MAX_LEE_TOYS: u32 = 2_000;
+
+/// The seed every browser calibration uses.
+///
+/// The bench's own seed, so the page's null is reproducible with
+/// `UMBRA_LEE_SEED`. The answer depends on it only through Monte Carlo noise.
+const BROWSER_LEE_SEED: u64 = 0x00c0_ffee;
+
+/// A 3 sigma detection's global false-positive rate (§7).
+const NOMINAL_3_SIGMA: f64 = 1.35e-3;
+
+/// Spacing of the global-`p` curve: 0 to 6 sigma in steps of 0.05.
+const GLOBAL_P_STEP: f32 = 0.05;
+
+/// Entries in that curve, inclusive of both ends.
+const GLOBAL_P_STEPS: usize = 121;
 
 /// Returns the API version this build speaks.
 #[wasm_bindgen]
@@ -146,6 +171,30 @@ pub struct ScanOutcome {
     pub correlate_ms: f64,
 }
 
+/// Result of `LEE_CALIB`, matching `Results.LEE_CALIB` in the client.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LeeOutcome {
+    /// The observed scan's peak `Z`, from the same configuration the toys ran.
+    pub peak_z: f32,
+    /// Empirical global `p` at that peak: the fraction of toys that reached it.
+    pub global_p_at_peak: f32,
+    /// Toys the observed peak was matched or beaten by.
+    pub toys_at_or_above_peak: u32,
+    /// Toys the calibration ran.
+    pub toys: u32,
+    /// The largest maximum in the null, which bounds where the curve has toys.
+    pub max_toy_z: f32,
+    /// Extrapolated global-3 sigma threshold, absent when the Euler anchor never
+    /// fired: an extrapolation from zero excursion sets would be the local `p`
+    /// wearing a global label.
+    pub z_at_3_sigma: Option<f32>,
+    /// Toys whose maximum exceeded the anchor `u0` — the support behind
+    /// `z_at_3_sigma`.
+    pub toys_above_u0: u32,
+    /// Global `p` at 0, 0.05, …, 6 sigma.
+    pub curve: Vec<f32>,
+}
+
 /// Result of `BUILD_SYSTEM`, matching `Results.BUILD_SYSTEM` in the client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildSummary {
@@ -221,6 +270,71 @@ pub struct Core {
     counts: HashMap<String, StoredCounts>,
     /// The flux table is ~megabytes of interpolation data; build it once.
     flux: Option<FluxTable>,
+}
+
+/// Everything one counts key names, as the scan and its calibration read it.
+///
+/// Both stages need exactly these pieces, and they must agree: the toys are drawn
+/// from the same λ⁰ the data was tested against. Deriving them twice is how the
+/// page would end up calibrating a different detector than the one it scanned, so
+/// the assembly happens once, here.
+struct Observation<'a> {
+    system: &'a System,
+    scene: &'a SceneSpec,
+    counts: Vec<f32>,
+    lambda0: Vec<f32>,
+    dlambda_dx: Vec<f32>,
+    density: Vec<f32>,
+}
+
+impl Observation<'_> {
+    /// The likelihood problem a scan, or one of its toys, is evaluated on.
+    fn problem(&self) -> ScanProblem<'_> {
+        ScanProblem {
+            system: self.system,
+            counts: &self.counts,
+            lambda0: &self.lambda0,
+            dlambda_dx: &self.dlambda_dx,
+            density: &self.density,
+            attenuation_gcm2: self.scene.forward_params().l0_attenuation_gcm2,
+        }
+    }
+}
+
+/// Validates a template bank and builds the scan configuration.
+///
+/// Shared so `SCAN` and `LEE_CALIB` refuse the same banks: a calibration run over
+/// a different bank than the scan would answer a different question.
+fn scan_config(scales_voxels: &[f32], profile_nuisances: bool) -> Result<ScanConfig, CoreError> {
+    if scales_voxels.is_empty() {
+        return Err(CoreError::new(
+            "scales",
+            "a scan needs at least one template radius",
+        ));
+    }
+    if scales_voxels.len() > MAX_SCAN_SCALES {
+        return Err(CoreError::new(
+            "scales",
+            format!(
+                "{} template radii exceeds the {MAX_SCAN_SCALES} one scan will run",
+                scales_voxels.len()
+            ),
+        ));
+    }
+    if let Some(bad) = scales_voxels
+        .iter()
+        .find(|radius| !radius.is_finite() || **radius <= 0.0)
+    {
+        return Err(CoreError::new(
+            "scales",
+            format!("template radii must be finite and positive, got {bad}"),
+        ));
+    }
+    Ok(ScanConfig {
+        scales_voxels: scales_voxels.to_vec(),
+        profile_nuisances,
+        ..ScanConfig::default()
+    })
 }
 
 impl Core {
@@ -494,48 +608,12 @@ impl Core {
         }
     }
 
-    /// `SCAN`: the A6 multi-scale score scan over the counts a `SIMULATE` drew.
+    /// The observation a counts key names: operator, λ⁰, ∂λ/∂X and the density.
     ///
-    /// `H0` is the scene the counts came from — its own density, its own flux
-    /// table, its fidelity and the exposure they were drawn at — so the test
-    /// asks the only question a landmark-free scan can answer: does this data
-    /// prefer a deficit of `α` × (reference density) inside a disc of some radius
-    /// *anywhere*, and where is that best?
-    ///
-    /// This is the score scan, not the refined likelihood ratio. `refine_lrt`
-    /// assumes the L0 transmission law, and the default scene is L1, so refining
-    /// here would fit a law the counts were not drawn from. The reported `Z` is a
-    /// local score significance, which is what a picture of the field should be.
-    pub fn scan(
-        &self,
-        counts_key: &str,
-        scales_voxels: &[f32],
-        profile_nuisances: bool,
-    ) -> Result<ScanOutcome, CoreError> {
-        if scales_voxels.is_empty() {
-            return Err(CoreError::new(
-                "scales",
-                "a scan needs at least one template radius",
-            ));
-        }
-        if scales_voxels.len() > MAX_SCAN_SCALES {
-            return Err(CoreError::new(
-                "scales",
-                format!(
-                    "{} template radii exceeds the {MAX_SCAN_SCALES} one scan will run",
-                    scales_voxels.len()
-                ),
-            ));
-        }
-        if let Some(bad) = scales_voxels
-            .iter()
-            .find(|radius| !radius.is_finite() || **radius <= 0.0)
-        {
-            return Err(CoreError::new(
-                "scales",
-                format!("template radii must be finite and positive, got {bad}"),
-            ));
-        }
+    /// `SCAN` and `LEE_CALIB` both need exactly this, and the calibration must
+    /// draw its toys from the *same* λ⁰ the data was tested against — so the two
+    /// share one derivation rather than each reading the stores its own way.
+    fn observation(&self, counts_key: &str) -> Result<Observation<'_>, CoreError> {
         let stored_counts = self.counts.get(counts_key).ok_or_else(|| {
             CoreError::new(
                 "unknown_counts",
@@ -598,19 +676,37 @@ impl Core {
         // density, so the same fraction inside dense rock removes more opacity —
         // and scores higher — than it would in air.
         let density = stored.scene.density();
-        let problem = ScanProblem {
+        Ok(Observation {
             system: &stored.system,
-            counts: &counts,
-            lambda0: &lambda0,
-            dlambda_dx: &dlambda_dx,
-            density: &density,
-            attenuation_gcm2: stored.scene.forward_params().l0_attenuation_gcm2,
-        };
-        let config = ScanConfig {
-            scales_voxels: scales_voxels.to_vec(),
-            profile_nuisances,
-            ..ScanConfig::default()
-        };
+            scene: &stored.scene,
+            counts,
+            lambda0,
+            dlambda_dx,
+            density,
+        })
+    }
+
+    /// `SCAN`: the A6 multi-scale score scan over the counts a `SIMULATE` drew.
+    ///
+    /// `H0` is the scene the counts came from — its own density, its own flux
+    /// table, its fidelity and the exposure they were drawn at — so the test
+    /// asks the only question a landmark-free scan can answer: does this data
+    /// prefer a deficit of `α` × (reference density) inside a disc of some radius
+    /// *anywhere*, and where is that best?
+    ///
+    /// This is the score scan, not the refined likelihood ratio. `refine_lrt`
+    /// assumes the L0 transmission law, and the default scene is L1, so refining
+    /// here would fit a law the counts were not drawn from. The reported `Z` is a
+    /// local score significance, which is what a picture of the field should be.
+    pub fn scan(
+        &self,
+        counts_key: &str,
+        scales_voxels: &[f32],
+        profile_nuisances: bool,
+    ) -> Result<ScanOutcome, CoreError> {
+        let config = scan_config(scales_voxels, profile_nuisances)?;
+        let observation = self.observation(counts_key)?;
+        let problem = observation.problem();
         // The peak and the field in one walk: both come from the same candidate
         // set, and walking it twice doubled the stage's cost for no second
         // answer.
@@ -626,6 +722,82 @@ impl Core {
             scales: scales_voxels.len() as u32,
             z,
             alpha_hat,
+        })
+    }
+
+    /// `LEE_CALIB`: how often background-only data reaches this scan's peak.
+    ///
+    /// Draws `toys` datasets from λ⁰ — the expected counts the observed data was
+    /// itself tested against — scans each with the same template bank, and reports
+    /// where the observed peak sits in that maximum-`Z` null. This is the layer
+    /// that turns a local significance into a claim about the whole search: a
+    /// 1.7 sigma peak at one of 1024 positions is not the same event as a 1.7
+    /// sigma peak at a position chosen in advance.
+    ///
+    /// The curve is empirical, because that is what a few hundred toys can
+    /// support. The extrapolated global-3 sigma threshold is reported only when
+    /// the Euler anchor fired at all (`toys_above_u0 > 0`); extrapolating from
+    /// zero excursion sets would quietly return the local `p` instead.
+    pub fn lee_calib(
+        &self,
+        counts_key: &str,
+        scales_voxels: &[f32],
+        toys: u32,
+        u0: f32,
+    ) -> Result<LeeOutcome, CoreError> {
+        if toys == 0 || toys > MAX_LEE_TOYS {
+            return Err(CoreError::new(
+                "toys",
+                format!("a calibration needs 1..={MAX_LEE_TOYS} toys, got {toys}"),
+            ));
+        }
+        if !u0.is_finite() || u0 <= 0.0 || u0 >= 6.0 {
+            return Err(CoreError::new(
+                "u0",
+                format!("the Euler anchor must be finite and inside (0, 6) sigma, got {u0}"),
+            ));
+        }
+        let config = scan_config(scales_voxels, false)?;
+        let observation = self.observation(counts_key)?;
+        let problem = observation.problem();
+        let lee = LeeConfig { u0, dim: 2 };
+        // One worker: the browser has no threads, and toy `t` depends only on
+        // `(seed, t)`, so a split could not change the answer anyway.
+        let calibration = lee_calibrate_with(&problem, &config, &lee, toys, BROWSER_LEE_SEED, 1);
+        // The observed peak, from the configuration the toys were calibrated on:
+        // a global `p` is only meaningful for the scan it is paired with.
+        let (found, _, _) = scan_with_map(&problem, &config);
+        let peak_z = found.peak.map_or(0.0, |candidate| candidate.z);
+        let curve: Vec<f32> = (0..GLOBAL_P_STEPS)
+            .map(|step| calibration.empirical_global_p(step as f32 * GLOBAL_P_STEP))
+            .collect();
+        let z_at_3_sigma = if calibration.toys_above_u0 == 0 {
+            None
+        } else {
+            let mut threshold = None;
+            let mut z = u0;
+            while z <= 6.0 {
+                if f64::from(calibration.extrapolated_global_p(z)) <= NOMINAL_3_SIGMA {
+                    threshold = Some(z);
+                    break;
+                }
+                z += GLOBAL_P_STEP;
+            }
+            threshold
+        };
+        Ok(LeeOutcome {
+            peak_z,
+            global_p_at_peak: calibration.empirical_global_p(peak_z),
+            toys_at_or_above_peak: calibration
+                .maxima
+                .iter()
+                .filter(|&&max| max >= peak_z)
+                .count() as u32,
+            toys,
+            max_toy_z: calibration.maxima.last().copied().unwrap_or(0.0),
+            z_at_3_sigma,
+            toys_above_u0: calibration.toys_above_u0,
+            curve,
         })
     }
 
@@ -938,6 +1110,26 @@ impl ComputeCore {
             .map(ScanResult::from)
             .map_err(fault)
     }
+
+    /// `LEE_CALIB`: the global-`p` curve for a scan of stored counts.
+    ///
+    /// The curve is a `Float32Array` at 0, 0.05, …, 6 sigma, transferred by the
+    /// worker. `zAt3Sigma` is `null` when the toys never reached the Euler anchor,
+    /// so the page can say so instead of printing an extrapolation with nothing
+    /// behind it.
+    #[wasm_bindgen(js_name = leeCalib)]
+    pub fn lee_calib(
+        &self,
+        counts_key: &str,
+        scales_voxels: Vec<f32>,
+        toys: u32,
+        u0: f32,
+    ) -> Result<LeeResult, JsValue> {
+        self.core
+            .lee_calib(counts_key, &scales_voxels, toys, u0)
+            .map(LeeResult::from)
+            .map_err(fault)
+    }
 }
 
 /// `RECON` returned across the boundary.
@@ -1053,6 +1245,86 @@ impl ScanResult {
     #[wasm_bindgen(getter, js_name = correlateMs)]
     pub fn correlate_ms(&self) -> f64 {
         self.correlate_ms
+    }
+}
+
+/// `LEE_CALIB` returned across the boundary.
+#[wasm_bindgen]
+pub struct LeeResult {
+    global_p_values: Vec<f32>,
+    peak_z: f32,
+    global_p_at_peak: f32,
+    toys_at_or_above_peak: u32,
+    toys: u32,
+    max_toy_z: f32,
+    z_at_3_sigma: Option<f32>,
+    toys_above_u0: u32,
+}
+
+impl From<LeeOutcome> for LeeResult {
+    fn from(outcome: LeeOutcome) -> Self {
+        Self {
+            global_p_values: outcome.curve,
+            peak_z: outcome.peak_z,
+            global_p_at_peak: outcome.global_p_at_peak,
+            toys_at_or_above_peak: outcome.toys_at_or_above_peak,
+            toys: outcome.toys,
+            max_toy_z: outcome.max_toy_z,
+            z_at_3_sigma: outcome.z_at_3_sigma,
+            toys_above_u0: outcome.toys_above_u0,
+        }
+    }
+}
+
+#[wasm_bindgen]
+impl LeeResult {
+    /// Global `p` at 0, 0.05, …, 6 sigma, as a `Float32Array`.
+    #[wasm_bindgen(getter, js_name = globalPValues)]
+    pub fn global_p_values(&self) -> Vec<f32> {
+        self.global_p_values.clone()
+    }
+
+    /// The observed scan's peak, which this curve is about.
+    #[wasm_bindgen(getter, js_name = peakZ)]
+    pub fn peak_z(&self) -> f32 {
+        self.peak_z
+    }
+
+    /// Empirical global `p` at that peak.
+    #[wasm_bindgen(getter, js_name = globalPAtPeak)]
+    pub fn global_p_at_peak(&self) -> f32 {
+        self.global_p_at_peak
+    }
+
+    /// Toys the peak was matched or beaten by.
+    #[wasm_bindgen(getter, js_name = toysAtOrAbovePeak)]
+    pub fn toys_at_or_above_peak(&self) -> u32 {
+        self.toys_at_or_above_peak
+    }
+
+    /// Toys the calibration ran.
+    #[wasm_bindgen(getter)]
+    pub fn toys(&self) -> u32 {
+        self.toys
+    }
+
+    /// The largest maximum in the null.
+    #[wasm_bindgen(getter, js_name = maxToyZ)]
+    pub fn max_toy_z(&self) -> f32 {
+        self.max_toy_z
+    }
+
+    /// Extrapolated global-3 sigma threshold, or nothing when the anchor never
+    /// fired.
+    #[wasm_bindgen(getter, js_name = zAt3Sigma)]
+    pub fn z_at_3_sigma(&self) -> Option<f32> {
+        self.z_at_3_sigma
+    }
+
+    /// Toys above the Euler anchor.
+    #[wasm_bindgen(getter, js_name = toysAboveU0)]
+    pub fn toys_above_u0(&self) -> u32 {
+        self.toys_above_u0
     }
 }
 
@@ -1577,6 +1849,83 @@ mod tests {
         assert_eq!(
             core.scan("counts", &[1.0; 9], false)
                 .expect_err("too many scales")
+                .code,
+            "scales"
+        );
+    }
+
+    #[test]
+    fn lee_calibration_is_deterministic_and_about_the_scan_it_calibrates() {
+        let core = simulated(7);
+        let scan = core.scan("counts", &[1.0, 2.0], false).expect("scan");
+        let first = core
+            .lee_calib("counts", &[1.0, 2.0], 64, 2.5)
+            .expect("calibration");
+        let second = core
+            .lee_calib("counts", &[1.0, 2.0], 64, 2.5)
+            .expect("second calibration");
+        assert_eq!(first, second, "the seed pins the curve");
+        assert_eq!(first.curve.len(), GLOBAL_P_STEPS);
+        assert!(
+            first.curve.iter().all(|p| (0.0..=1.0).contains(p)),
+            "a p-value outside [0, 1] is not a p-value"
+        );
+        assert!(
+            first.curve.windows(2).all(|pair| pair[1] <= pair[0]),
+            "a global p must not rise with the threshold: {:?}",
+            first.curve
+        );
+        // The calibration is about *this* scan: a peak from a different walk
+        // would pair a p-value with the wrong candidate.
+        assert_eq!(first.peak_z, scan.max_z);
+        assert_eq!(first.toys, 64);
+        assert!(first.toys_at_or_above_peak <= first.toys);
+        assert!(first.max_toy_z.is_finite());
+        // The reported p is the toy count, not a second estimate: half-count over
+        // toys plus one is the estimator `empirical_global_p` defines, and a page
+        // that printed two numbers disagreeing with each other would be worse than
+        // printing one.
+        let expected_p =
+            (f64::from(first.toys_at_or_above_peak) + 0.5) / (f64::from(first.toys) + 1.0);
+        assert!(
+            (f64::from(first.global_p_at_peak) - expected_p).abs() < 1e-6,
+            "p {} does not match {} toys of {}",
+            first.global_p_at_peak,
+            first.toys_at_or_above_peak,
+            first.toys
+        );
+    }
+
+    #[test]
+    fn lee_calibration_refuses_a_campaign_it_cannot_run() {
+        let core = simulated(7);
+        assert_eq!(
+            core.lee_calib("counts", &[1.0], 0, 2.5)
+                .expect_err("no toys")
+                .code,
+            "toys"
+        );
+        assert_eq!(
+            core.lee_calib("counts", &[1.0], MAX_LEE_TOYS + 1, 2.5)
+                .expect_err("too many toys")
+                .code,
+            "toys"
+        );
+        assert_eq!(
+            core.lee_calib("counts", &[1.0], 16, 0.0)
+                .expect_err("bad anchor")
+                .code,
+            "u0"
+        );
+        assert_eq!(
+            core.lee_calib("nope", &[1.0], 16, 2.5)
+                .expect_err("unknown counts")
+                .code,
+            "unknown_counts"
+        );
+        assert_eq!(
+            core.lee_calib("counts", &[], 16, 2.5)
+                .expect_err("no scales")
                 .code,
             "scales"
         );

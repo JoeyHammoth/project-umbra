@@ -13,6 +13,18 @@ const MIN_EXPOSURE = 600;
 const MAX_EXPOSURE = 86_400;
 const EXPOSURE_STEP = 600;
 
+/**
+ * Toys the page's look-elsewhere calibration runs.
+ *
+ * Two hundred is enough to say whether this peak is ordinary, in one worker and
+ * well under a second; the campaign that pins the 3σ rate needs 10⁵ and runs in
+ * CI (§10.3), not here.
+ */
+const LEE_TOYS = 200;
+
+/** Where the Euler characteristic is measured, in sigma. */
+const LEE_U0 = 2.5;
+
 /** Seconds as hours, which is how a muon exposure is usually quoted. */
 function formatExposure(seconds: number): string {
   return `${(seconds / 3600).toFixed(1)} h`;
@@ -37,6 +49,18 @@ type BuildState =
       peakZ: number;
       peakVoxel: number;
       peakAlpha: number;
+      /** The look-elsewhere calibration: what the whole search does under H0. */
+      lee: {
+        peakZ: number;
+        globalPAtPeak: number;
+        toysAtOrAbovePeak: number;
+        toys: number;
+        maxToyZ: number;
+        zAt3Sigma: number | null;
+        toysAboveU0: number;
+        /** Round trip of the calibration, measured here because wasm has no clock. */
+        ms: number;
+      };
     }
   | { status: 'failed'; code: string; message: string };
 
@@ -184,6 +208,25 @@ export function App() {
           payload: scanPayload,
         });
 
+        // The look-elsewhere correction: the same bank over background-only toys
+        // drawn from the λ⁰ the data was tested against. Without it the page
+        // would quote a local `Z` as though it were a claim about one position.
+        const leePayload = {
+          countsKey,
+          scalesVoxels: [1, 2],
+          toys: LEE_TOYS,
+          u0: LEE_U0,
+        };
+        const leeStarted = performance.now();
+        const lee = await bus.submit({
+          id: crypto.randomUUID(),
+          kind: 'LEE_CALIB',
+          key: await contentKey('LEE_CALIB', leePayload),
+          priority: 0,
+          payload: leePayload,
+        });
+        const leeMs = performance.now() - leeStarted;
+
         if (live) {
           setState({
             status: 'ok',
@@ -200,6 +243,16 @@ export function App() {
             peakZ: scan.maxZ,
             peakVoxel: scan.voxel,
             peakAlpha: scan.peakAlpha,
+            lee: {
+              peakZ: lee.peakZ as number,
+              globalPAtPeak: lee.globalPAtPeak as number,
+              toysAtOrAbovePeak: lee.toysAtOrAbovePeak as number,
+              toys: lee.toys as number,
+              maxToyZ: lee.maxToyZ as number,
+              zAt3Sigma: lee.zAt3Sigma as number | null,
+              toysAboveU0: lee.toysAboveU0 as number,
+              ms: leeMs,
+            },
           });
         }
       } catch (error) {
@@ -247,6 +300,25 @@ export function App() {
               : 'Waiting for the scan…'
           }
         />
+        {shown ? (
+          <p
+            className="detail"
+            data-testid="lee"
+            data-toys={shown.lee.toys}
+            data-peak-z={shown.lee.peakZ}
+            data-global-p={shown.lee.globalPAtPeak}
+          >
+            Look-elsewhere: the scan's local peak of {shown.lee.peakZ.toFixed(2)}σ was
+            matched or beaten by {shown.lee.toysAtOrAbovePeak} of {shown.lee.toys}{' '}
+            background-only toys, so its global <em>p</em> is{' '}
+            {shown.lee.globalPAtPeak.toFixed(3)} — a local significance says nothing
+            about a search of {shown.cols} positions.{' '}
+            {shown.lee.zAt3Sigma === null
+              ? `No toy reached the ${LEE_U0}σ Euler anchor, so no extrapolated 3σ threshold is quoted.`
+              : `Extrapolated from the ${shown.lee.toysAboveU0} toys above ${LEE_U0}σ, a global 3σ would need ${shown.lee.zAt3Sigma.toFixed(2)}σ.`}{' '}
+            The {shown.lee.toys} toys took {Math.round(shown.lee.ms)} ms here, round trip.
+          </p>
+        ) : null}
         <label className="exposure">
           <span>Exposure</span>
           <input
