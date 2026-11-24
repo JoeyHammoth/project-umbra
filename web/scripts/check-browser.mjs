@@ -419,8 +419,45 @@ async function main() {
       );
     }
 
+    // The window is a control, not a caption. Moving both sliders to the full
+    // positive range must change the pixels: a slider wired only to the legend
+    // would leave this canvas identical and read as working.
+    const moved = await client.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const canvas = document.querySelector('canvas[data-testid="density"]');
+        const context = canvas.getContext('2d');
+        const before = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        const sliders = [...document.querySelectorAll('.window input[type="range"]')];
+        if (sliders.length !== 2) return { found: false, sliders: sliders.length };
+        const set = (input, value) => {
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+          setter.call(input, String(value));
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        };
+        set(sliders[0], 0);
+        set(sliders[1], 100);
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const after = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        let changed = 0;
+        for (let i = 0; i < after.length; i += 1) { if (before[i] !== after[i]) changed += 1; }
+        return { found: true, changed };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    const windowed = moved.result?.result?.value;
+    if (!windowed?.found) {
+      throw new Error(
+        `the page has ${String(windowed?.sliders)} window sliders, not two\n` +
+          diagnostics(client, logLines),
+      );
+    }
+    if (!(windowed.changed > 0)) {
+      throw new Error('moving the window to 0–100% painted the same pixels');
+    }
+
     client.close();
-    return `${text} [indexeddb records: ${records}] [canvas 32x32, ${drawn.lit} lit] [scan 32x32, distinct] [lee ${calibrated.toys} toys, p ${calibrated.globalP}]`;
+    return `${text} [indexeddb records: ${records}] [canvas 32x32, ${drawn.lit} lit] [scan 32x32, distinct] [lee ${calibrated.toys} toys, p ${calibrated.globalP}] [window moved, ${windowed.changed} bytes]`;
   } finally {
     chrome.kill();
     // A killed Chrome can leave a renderer holding the inherited stderr pipe,
