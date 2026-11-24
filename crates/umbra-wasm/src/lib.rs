@@ -18,18 +18,21 @@
 //! `Vec<u32>` arrive in JavaScript as `Float32Array` and `Uint32Array`, which
 //! the worker then *transfers* to the main thread (spec §4.6).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use umbra_core::{stream_id, Philox};
 use umbra_forward::{build_system_2d, expected as expected_counts, SceneSpec, System};
 use umbra_physics::{generate_default, Fidelity, FluxTable};
+use umbra_recon::{
+    A1Config, A2Config, Control, PoissonMap, Problem, Solver, Start, TransmissionEm,
+};
 use wasm_bindgen::prelude::*;
 
 /// Version of the compute-core API contract.
 ///
 /// The TypeScript client compares this against its own expectation at startup,
 /// so a stale cached `.wasm` fails loudly instead of silently mismatching.
-pub const API_VERSION: &str = "0.1.0";
+pub const API_VERSION: &str = "0.2.0";
 
 /// Task id mixed into a `SIMULATE` stream id.
 ///
@@ -38,6 +41,13 @@ pub const API_VERSION: &str = "0.1.0";
 /// scrubbed one: the two would otherwise draw correlated counts from the same
 /// Philox blocks and the difference between them would look like signal.
 const TASK_SIMULATE: u32 = 3;
+
+/// The largest iteration budget a single `RECON` will run.
+///
+/// A worker cannot be interrupted from inside a solver step, so an unbounded
+/// request would hold a thread and starve the pool. Ten thousand steps is far
+/// past any interactive budget and still bounded.
+const MAX_RECON_ITERATIONS: u32 = 10_000;
 
 /// Returns the API version this build speaks.
 #[wasm_bindgen]
@@ -90,6 +100,18 @@ impl std::fmt::Display for CoreError {
     }
 }
 
+/// Result of `RECON`, matching `Results.RECON` in the client.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReconOutcome {
+    /// One entry per voxel, in g cm⁻³.
+    pub density: Vec<f32>,
+    /// Steps actually taken, which is fewer than requested when the solver
+    /// declared convergence.
+    pub iterations: u32,
+    /// Final objective, for the solvers that have one.
+    pub objective: Option<f64>,
+}
+
 /// Result of `BUILD_SYSTEM`, matching `Results.BUILD_SYSTEM` in the client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildSummary {
@@ -113,6 +135,28 @@ struct StoredExpected {
     rate_per_s: Vec<f32>,
     /// The scene the counts came from, mixed into the simulator's stream ids.
     scene_key: u64,
+    /// The system the rates belong to, so `RECON` can find its operator.
+    system_key: String,
+    /// The fidelity these rates were evaluated at.
+    ///
+    /// An override applies to this observation, not to the scene, so a solver
+    /// has to be told which model its data obeys rather than re-reading the
+    /// scene and guessing.
+    fidelity: Fidelity,
+}
+
+/// The counts a `SIMULATE` drew, kept so `RECON` can fit them.
+///
+/// The counts key names the whole observation: the operator, the physics and the
+/// data. A solver handed counts alone would have to assume a flux table, an
+/// exposure and a fidelity — three ways to fit the wrong model while every
+/// convergence test still passed.
+struct StoredCounts {
+    /// The expected-count vector the counts were drawn from.
+    expected_key: String,
+    /// The exposure they were drawn at.
+    exposure_s: f32,
+    counts: Vec<u32>,
 }
 
 /// The stateful compute core behind the façade.
@@ -124,6 +168,7 @@ struct StoredExpected {
 pub struct Core {
     systems: HashMap<String, StoredSystem>,
     expected: HashMap<String, StoredExpected>,
+    counts: HashMap<String, StoredCounts>,
     /// The flux table is ~megabytes of interpolation data; build it once.
     flux: Option<FluxTable>,
 }
@@ -214,6 +259,8 @@ impl Core {
             StoredExpected {
                 rate_per_s,
                 scene_key,
+                system_key: system_key.to_string(),
+                fidelity,
             },
         );
         Ok(evaluated.lambda)
@@ -243,6 +290,7 @@ impl Core {
     /// scene with the same seed is an independent universe.
     pub fn simulate(
         &mut self,
+        counts_key: &str,
         expected_key: &str,
         seed: u64,
         exposure_s: f32,
@@ -259,23 +307,226 @@ impl Core {
                 format!("exposure {exposure_s} s must be finite and non-negative"),
             ));
         }
-        if exposure_s == 0.0 {
-            return Ok(vec![0; stored.rate_per_s.len()]);
-        }
-        let mut counts = Vec::with_capacity(stored.rate_per_s.len());
-        for (ray, rate) in stored.rate_per_s.iter().enumerate() {
-            let mean = f64::from(*rate) * f64::from(exposure_s);
-            let stream = stream_id(stored.scene_key, TASK_SIMULATE, ray as u64);
-            let mut rng = Philox::new(seed, stream);
-            counts.push(rng.poisson(mean.max(0.0)).min(u64::from(u32::MAX)) as u32);
-        }
+        let counts = if exposure_s == 0.0 {
+            vec![0u32; stored.rate_per_s.len()]
+        } else {
+            let mut counts = Vec::with_capacity(stored.rate_per_s.len());
+            for (ray, rate) in stored.rate_per_s.iter().enumerate() {
+                let mean = f64::from(*rate) * f64::from(exposure_s);
+                let stream = stream_id(stored.scene_key, TASK_SIMULATE, ray as u64);
+                let mut rng = Philox::new(seed, stream);
+                counts.push(rng.poisson(mean.max(0.0)).min(u64::from(u32::MAX)) as u32);
+            }
+            counts
+        };
+        // Kept so the next task can fit them: the counts are the observation
+        // `RECON` is asked about, and its own key names them.
+        self.counts.insert(
+            counts_key.to_string(),
+            StoredCounts {
+                expected_key: expected_key.to_string(),
+                exposure_s,
+                counts: counts.clone(),
+            },
+        );
         Ok(counts)
+    }
+
+    /// `RECON`: runs one solver over the counts a `SIMULATE` drew.
+    ///
+    /// The counts key names the observation, so the operator, the flux table,
+    /// the fidelity and the exposure all come from what produced the data rather
+    /// than from what the caller believes.
+    pub fn recon(
+        &mut self,
+        counts_key: &str,
+        solver: &str,
+        params: &BTreeMap<String, f64>,
+        iterations: u32,
+    ) -> Result<ReconOutcome, CoreError> {
+        if iterations == 0 {
+            return Err(CoreError::new(
+                "iterations",
+                "recon needs at least one iteration",
+            ));
+        }
+        if iterations > MAX_RECON_ITERATIONS {
+            return Err(CoreError::new(
+                "iterations",
+                format!(
+                    "{iterations} iterations exceeds the {MAX_RECON_ITERATIONS} a worker will run"
+                ),
+            ));
+        }
+        let stored_counts = self.counts.get(counts_key).ok_or_else(|| {
+            CoreError::new(
+                "unknown_counts",
+                format!("no counts for key `{counts_key}`: run SIMULATE first"),
+            )
+        })?;
+        let expected_key = stored_counts.expected_key.clone();
+        let exposure_s = stored_counts.exposure_s;
+        let counts_u32 = stored_counts.counts.clone();
+        let stored_expected = self.expected.get(&expected_key).ok_or_else(|| {
+            CoreError::new(
+                "unknown_expected",
+                format!("counts `{counts_key}` name missing expected counts `{expected_key}`"),
+            )
+        })?;
+        let system_key = stored_expected.system_key.clone();
+        let fidelity = stored_expected.fidelity;
+        let stored = self.systems.get(&system_key).ok_or_else(|| {
+            CoreError::new(
+                "unknown_system",
+                format!("no system for key `{system_key}`: run BUILD_SYSTEM first"),
+            )
+        })?;
+        if counts_u32.len() != stored.system.ray_count() {
+            return Err(CoreError::new(
+                "counts",
+                format!(
+                    "{} counts for {} rays: the dataset does not match its operator",
+                    counts_u32.len(),
+                    stored.system.ray_count()
+                ),
+            ));
+        }
+        let counts: Vec<f32> = counts_u32.iter().map(|count| *count as f32).collect();
+        let flux = self.flux.get_or_insert_with(generate_default);
+        let problem = Problem::new(
+            &stored.system,
+            &counts,
+            flux,
+            fidelity,
+            exposure_s,
+            stored.scene.forward_params(),
+        );
+        match solver {
+            "a1-transmission-em" => {
+                if fidelity != Fidelity::L0 {
+                    // A1's model is Beer–Lambert. On L1 or L2 data it is a model
+                    // error, not a tuning choice, and the solver asserts that;
+                    // refusing here keeps the failure a coded error instead of a
+                    // panic inside a worker.
+                    return Err(CoreError::new(
+                        "fidelity",
+                        "a1-transmission-em assumes L0 data; use a2-poisson-map for this scene",
+                    ));
+                }
+                let mut config = A1Config::from_scene(&stored.scene);
+                apply_a1(&mut config, params)?;
+                Ok(drive(
+                    TransmissionEm::with_start(&problem, config, &Start::default()),
+                    iterations,
+                ))
+            }
+            "a2-poisson-map" => {
+                let mut config = A2Config::from_scene(&stored.scene);
+                apply_a2(&mut config, params)?;
+                Ok(drive(
+                    PoissonMap::init(&problem, &config, &Start::default()),
+                    iterations,
+                ))
+            }
+            other => Err(CoreError::new(
+                "unimplemented",
+                format!(
+                    "solver `{other}` has no worker entry point yet; a1-transmission-em and a2-poisson-map are wired"
+                ),
+            )),
+        }
     }
 
     /// Number of systems the core is holding, for the worker's own accounting.
     pub fn system_count(&self) -> usize {
         self.systems.len()
     }
+}
+
+/// Runs a solver to its budget or its own convergence, whichever comes first.
+fn drive<S: Solver>(mut solver: S, iterations: u32) -> ReconOutcome {
+    let control = Control::new(iterations, iterations);
+    let mut objective = None;
+    let mut taken = 0;
+    for _ in 0..iterations {
+        let report = solver.step(&control);
+        taken += 1;
+        if report.objective.is_some() {
+            objective = report.objective;
+        }
+        if report.converged {
+            break;
+        }
+    }
+    ReconOutcome {
+        density: solver.estimate().to_vec(),
+        iterations: taken,
+        objective,
+    }
+}
+
+/// Rejects a parameter that cannot be a finite, non-negative f32.
+fn positive(key: &str, value: f64) -> Result<f32, CoreError> {
+    if !value.is_finite() || value < 0.0 {
+        return Err(CoreError::new(
+            "params",
+            format!("`{key}` must be finite and non-negative, got {value}"),
+        ));
+    }
+    Ok(value as f32)
+}
+
+/// Rejects a parameter that cannot be a whole number below `max`.
+fn integral(key: &str, value: f64, max: u32) -> Result<u32, CoreError> {
+    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value > f64::from(max) {
+        return Err(CoreError::new(
+            "params",
+            format!("`{key}` must be a whole number in 0..={max}, got {value}"),
+        ));
+    }
+    Ok(value as u32)
+}
+
+/// Applies `params` to an A1 configuration, rejecting keys A1 does not have.
+fn apply_a1(config: &mut A1Config, params: &BTreeMap<String, f64>) -> Result<(), CoreError> {
+    for (key, value) in params {
+        match key.as_str() {
+            "subsets" => config.subsets = integral(key, *value, 256)?,
+            "rhoInit" => config.rho_init = positive(key, *value)?,
+            "rhoMax" => config.rho_max = positive(key, *value)?,
+            "tolerance" => config.tolerance = positive(key, *value)?,
+            "maxBacktracks" => config.max_backtracks = integral(key, *value, 64)?,
+            other => {
+                return Err(CoreError::new(
+                    "params",
+                    format!("a1-transmission-em has no parameter `{other}`"),
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Applies `params` to an A2 configuration, rejecting keys A2 does not have.
+fn apply_a2(config: &mut A2Config, params: &BTreeMap<String, f64>) -> Result<(), CoreError> {
+    for (key, value) in params {
+        match key.as_str() {
+            "beta" => config.beta = positive(key, *value)?,
+            "huberEps" => config.huber_eps = positive(key, *value)?,
+            "rhoInit" => config.rho_init = positive(key, *value)?,
+            "rhoMax" => config.rho_max = positive(key, *value)?,
+            "tolerance" => config.tolerance = positive(key, *value)?,
+            "maxBacktracks" => config.max_backtracks = integral(key, *value, 64)?,
+            "memory" => config.memory = integral(key, *value, 64)? as usize,
+            other => {
+                return Err(CoreError::new(
+                    "params",
+                    format!("a2-poisson-map has no parameter `{other}`"),
+                ))
+            }
+        }
+    }
+    Ok(())
 }
 
 fn fidelity_from_id(id: &str) -> Option<Fidelity> {
@@ -398,17 +649,84 @@ impl ComputeCore {
         self.core.scene_density(system_key).map_err(fault)
     }
 
-    /// `SIMULATE`: counts at `exposure_s`, as a `Uint32Array`.
+    /// `SIMULATE`: counts at `exposure_s`, as a `Uint32Array`, stored under
+    /// `counts_key` for the `RECON` that fits them.
     #[wasm_bindgen(js_name = simulate)]
     pub fn simulate(
         &mut self,
+        counts_key: &str,
         expected_key: &str,
         seed: u64,
         exposure_s: f32,
     ) -> Result<Vec<u32>, JsValue> {
         self.core
-            .simulate(expected_key, seed, exposure_s)
+            .simulate(counts_key, expected_key, seed, exposure_s)
             .map_err(fault)
+    }
+
+    /// `RECON`: runs `solver` over counts, returning the density as a
+    /// `Float32Array` the worker transfers.
+    ///
+    /// The boundary takes no records, so `params` arrives as two arrays in the
+    /// same order. A mismatch between them means a bug in the caller, and is
+    /// refused rather than zipped to its shorter length.
+    #[wasm_bindgen(js_name = recon)]
+    pub fn recon(
+        &mut self,
+        counts_key: &str,
+        solver: &str,
+        param_names: Vec<String>,
+        param_values: Vec<f64>,
+        iterations: u32,
+    ) -> Result<ReconResult, JsValue> {
+        if param_names.len() != param_values.len() {
+            return Err(fault(CoreError::new(
+                "params",
+                format!(
+                    "{} parameter names but {} values",
+                    param_names.len(),
+                    param_values.len()
+                ),
+            )));
+        }
+        let params: BTreeMap<String, f64> = param_names.into_iter().zip(param_values).collect();
+        self.core
+            .recon(counts_key, solver, &params, iterations)
+            .map(|outcome| ReconResult {
+                density: outcome.density,
+                iterations: outcome.iterations,
+                objective: outcome.objective,
+            })
+            .map_err(fault)
+    }
+}
+
+/// `RECON` returned across the boundary.
+#[wasm_bindgen]
+pub struct ReconResult {
+    density: Vec<f32>,
+    iterations: u32,
+    objective: Option<f64>,
+}
+
+#[wasm_bindgen]
+impl ReconResult {
+    /// Reconstructed density, one entry per voxel, in g cm⁻³.
+    #[wasm_bindgen(getter)]
+    pub fn density(&self) -> Vec<f32> {
+        self.density.clone()
+    }
+
+    /// Steps the solver actually took.
+    #[wasm_bindgen(getter)]
+    pub fn iterations(&self) -> u32 {
+        self.iterations
+    }
+
+    /// Final objective, absent for a solver that has none.
+    #[wasm_bindgen(getter)]
+    pub fn objective(&self) -> Option<f64> {
+        self.objective
     }
 }
 
@@ -570,7 +888,9 @@ mod tests {
             "the test scene must produce a measurable number of counts, got {expected_total}"
         );
 
-        let counts = core.simulate("exp", 1234, 3600.0).expect("simulate");
+        let counts = core
+            .simulate("counts", "exp", 1234, 3600.0)
+            .expect("simulate");
         assert_eq!(counts.len(), lambda.len());
         let total: f64 = counts.iter().map(|count| f64::from(*count)).sum();
         let sigma = expected_total.sqrt();
@@ -594,10 +914,16 @@ mod tests {
         core.expected("sys", "exp", &density, None)
             .expect("expected");
 
-        let first = core.simulate("exp", 99, 3600.0).expect("simulate");
-        let again = core.simulate("exp", 99, 3600.0).expect("simulate");
+        let first = core
+            .simulate("counts", "exp", 99, 3600.0)
+            .expect("simulate");
+        let again = core
+            .simulate("counts", "exp", 99, 3600.0)
+            .expect("simulate");
         assert_eq!(first, again, "the same seed must replay the same dataset");
-        let other = core.simulate("exp", 100, 3600.0).expect("simulate");
+        let other = core
+            .simulate("counts", "exp", 100, 3600.0)
+            .expect("simulate");
         assert_ne!(first, other, "a different seed must be a different dataset");
     }
 
@@ -612,12 +938,12 @@ mod tests {
             .expect("expected");
 
         assert_eq!(
-            core.simulate("exp", 5, 0.0).expect("simulate"),
+            core.simulate("counts", "exp", 5, 0.0).expect("simulate"),
             vec![0; lambda.len()]
         );
         // Half the exposure halves the mean, because the rate is stored per
         // second rather than as counts at the scene's exposure.
-        let half = core.simulate("exp", 5, 1800.0).expect("simulate");
+        let half = core.simulate("counts", "exp", 5, 1800.0).expect("simulate");
         let full_total: f64 = lambda.iter().map(|value| f64::from(*value)).sum();
         let half_total: f64 = half.iter().map(|count| f64::from(*count)).sum();
         let sigma = (full_total * 0.5).sqrt();
@@ -637,7 +963,7 @@ mod tests {
         assert_eq!(missing.code, "unknown_system");
 
         let unknown_expected = core
-            .simulate("nope", 1, 10.0)
+            .simulate("counts", "nope", 1, 10.0)
             .expect_err("unknown expected");
         assert_eq!(unknown_expected.code, "unknown_expected");
 
@@ -660,7 +986,7 @@ mod tests {
 
         let negative = core
             .expected("sys", "exp", &vec![2.65; 256], None)
-            .and_then(|_| core.simulate("exp", 1, -1.0))
+            .and_then(|_| core.simulate("counts", "exp", 1, -1.0))
             .expect_err("negative exposure");
         assert_eq!(negative.code, "exposure");
     }
@@ -690,5 +1016,98 @@ mod tests {
         // The grid in this module's scenes is 16 × 16 of 0.5 m voxels.
         let grid = Grid2::new([16, 16], [-4.0, -4.0], 0.5);
         assert_eq!(grid.cell_count(), 256);
+    }
+
+    /// Builds, evaluates, simulates and reconstructs the test scene.
+    fn reconstruct(solver: &str, params: &BTreeMap<String, f64>, iterations: u32) -> ReconOutcome {
+        let text = scene_json(3600.0, 8, 3);
+        let mut core = Core::new();
+        core.build_system("sys", &text).expect("build");
+        let density = core.scene_density("sys").expect("density");
+        core.expected("sys", "exp", &density, None)
+            .expect("expected");
+        core.simulate("counts", "exp", 7, 3600.0).expect("simulate");
+        core.recon("counts", solver, params, iterations)
+            .expect("recon")
+    }
+
+    #[test]
+    fn recon_returns_one_density_per_voxel_and_improves_the_fit() {
+        let params = BTreeMap::new();
+        let outcome = reconstruct("a2-poisson-map", &params, 30);
+        assert_eq!(outcome.density.len(), 256, "16 x 16 voxels");
+        assert!(
+            outcome
+                .density
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0 && *value <= 4.0),
+            "every density must sit inside the solver's box"
+        );
+        assert!(
+            outcome.iterations > 0 && outcome.iterations <= 30,
+            "steps taken: {}",
+            outcome.iterations
+        );
+        // One step and thirty steps on the same data: the longer run has to fit
+        // better, which is the only claim here about the answer itself.
+        let brief = reconstruct("a2-poisson-map", &params, 1);
+        let (long, short) = (
+            outcome.objective.expect("A2 reports an objective"),
+            brief.objective.expect("A2 reports an objective"),
+        );
+        assert!(
+            long < short,
+            "30 steps reached {long}, 1 step reached {short}"
+        );
+    }
+
+    #[test]
+    fn recon_refuses_what_it_cannot_run() {
+        let text = scene_json(100.0, 4, 1);
+        let mut core = Core::new();
+        core.build_system("sys", &text).expect("build");
+        let params = BTreeMap::new();
+        assert_eq!(
+            core.recon("nope", "a2-poisson-map", &params, 5)
+                .expect_err("unknown counts")
+                .code,
+            "unknown_counts"
+        );
+
+        let density = core.scene_density("sys").expect("density");
+        core.expected("sys", "exp", &density, None)
+            .expect("expected");
+        core.simulate("counts", "exp", 1, 100.0).expect("simulate");
+        assert_eq!(
+            core.recon("counts", "a9-nope", &params, 5)
+                .expect_err("unknown solver")
+                .code,
+            "unimplemented"
+        );
+        assert_eq!(
+            core.recon("counts", "a2-poisson-map", &params, 0)
+                .expect_err("no iterations")
+                .code,
+            "iterations"
+        );
+        let typo = BTreeMap::from([("betta".to_string(), 1.0)]);
+        assert_eq!(
+            core.recon("counts", "a2-poisson-map", &typo, 5)
+                .expect_err("unknown parameter")
+                .code,
+            "params"
+        );
+        assert_eq!(
+            core.recon(
+                "counts",
+                "a2-poisson-map",
+                &BTreeMap::from([("memory".to_string(), 2.5)]),
+                5
+            )
+            .expect_err("fractional memory")
+            .code,
+            "params",
+            "a whole-number parameter must not be truncated"
+        );
     }
 }

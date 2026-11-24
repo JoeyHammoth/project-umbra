@@ -15,6 +15,9 @@ type BuildState =
       nnz: number;
       lambda: ArrayBufferView;
       counts: Uint32Array;
+      density: Float32Array;
+      steps: number;
+      objective: number | null;
     }
   | { status: 'failed'; code: string; message: string };
 
@@ -28,16 +31,21 @@ function describe(state: BuildState, cache: CacheKind | null): string {
       // instead of merely slower.
       const lambda = state.lambda instanceof Float32Array ? state.lambda : null;
       const counts = state.counts instanceof Uint32Array ? state.counts : null;
-      if (!lambda || !counts) {
+      const density = state.density instanceof Float32Array ? state.density : null;
+      if (!lambda || !counts || !density) {
         return (
-          `bulk data came back as ${state.lambda?.constructor?.name ?? 'nothing'} and ` +
-          `${state.counts?.constructor?.name ?? 'nothing'}: it must be transferred as typed arrays`
+          `bulk data came back as ${state.lambda?.constructor?.name ?? 'nothing'}, ` +
+          `${state.counts?.constructor?.name ?? 'nothing'} and ` +
+          `${state.density?.constructor?.name ?? 'nothing'}: it must be transferred as typed arrays`
         );
       }
       const events = counts.reduce((total, count) => total + count, 0);
+      const objective =
+        state.objective === null ? '' : `, objective ${state.objective.toPrecision(6)}`;
       return (
         `Assembled ${state.rows} rays × ${state.cols} voxels, ${state.nnz} non-zero path lengths · ` +
-        `λ Float32Array(${lambda.length}) · counts Uint32Array(${counts.length}), ${events} events` +
+        `λ Float32Array(${lambda.length}) · counts Uint32Array(${counts.length}), ${events} events · ` +
+        `ρ Float32Array(${density.length}) after ${state.steps} steps${objective}` +
         (cache === null ? '' : ` · cached in ${cache}`)
       );
     }
@@ -47,12 +55,12 @@ function describe(state: BuildState, cache: CacheKind | null): string {
 }
 
 /**
- * The landing page, with the first three stages actually running.
+ * The landing page, with the first four stages actually running.
  *
- * `BUILD_SYSTEM` → `EXPECTED` → `SIMULATE` runs on mount rather than behind a
- * button, so the wiring is exercised every time the page loads: a broken worker,
- * a mismatched module or a protocol slip says so instead of leaving a plausible
- * looking scaffold.
+ * `BUILD_SYSTEM` → `EXPECTED` → `SIMULATE` → `RECON` runs on mount rather than
+ * behind a button, so the wiring is exercised every time the page loads: a broken
+ * worker, a mismatched module or a protocol slip says so instead of leaving a
+ * plausible looking scaffold.
  */
 export function App() {
   const [state, setState] = useState<BuildState>({ status: 'running' });
@@ -91,12 +99,29 @@ export function App() {
         });
 
         const simulatePayload = { expectedKey, seed: '7', exposureSeconds: 3600 };
+        const countsKey = await contentKey('SIMULATE', simulatePayload);
         const counts = await bus.submit({
           id: crypto.randomUUID(),
           kind: 'SIMULATE',
-          key: await contentKey('SIMULATE', simulatePayload),
+          key: countsKey,
           priority: 0,
           payload: simulatePayload,
+        });
+
+        // A2 rather than A1 because the default scene is L1 and A1's model is
+        // Beer–Lambert: the core refuses that combination instead of fitting it.
+        const reconPayload = {
+          countsKey,
+          solver: 'a2-poisson-map' as const,
+          params: {},
+          iterations: 20,
+        };
+        const recon = await bus.submit({
+          id: crypto.randomUUID(),
+          kind: 'RECON',
+          key: await contentKey('RECON', reconPayload),
+          priority: 0,
+          payload: reconPayload,
         });
 
         if (live) {
@@ -107,6 +132,9 @@ export function App() {
             nnz: build.nnz,
             lambda: expected.lambda,
             counts: counts.counts,
+            density: recon.density as Float32Array,
+            steps: recon.iterations,
+            objective: recon.objective,
           });
         }
       } catch (error) {
@@ -142,19 +170,20 @@ export function App() {
           {describe(state, cache)}
         </p>
         <p>
-          The first three stages run in a Web Worker against the Rust core
+          The first four stages run in a Web Worker against the Rust core
           compiled to WebAssembly, through the same <code>ComputeBus</code> every
-          later stage will use. The operator stays in the worker; λ and the counts
-          are transferred back as typed arrays rather than serialised.
+          later stage will use. The operator stays in the worker; λ, the counts
+          and the reconstructed density are transferred back as typed arrays
+          rather than serialised.
         </p>
       </section>
 
       <section aria-labelledby="status">
         <h2 id="status">Pipeline</h2>
         <p>
-          The stages below share one protocol. Those past <code>SIMULATE</code>{' '}
+          The stages below share one protocol. Those past <code>RECON</code>{' '}
           are not wired yet — the scaffold exists so the store, the renderer and
-          the solvers can be built against a fixed contract.
+          the remaining statistics can be built against a fixed contract.
         </p>
         <ol className="stages">
           {PIPELINE_STAGES.map((stage) => (
