@@ -75,7 +75,24 @@ export interface Results {
   EXPECTED: { lambda: ArrayBufferView };
   SIMULATE: { counts: Uint32Array };
   RECON: { density: ArrayBufferView; iterations: number; objective: number | null };
-  SCAN: { z: ArrayBufferView; alphaHat: ArrayBufferView; maxZ: number; voxel: number };
+  SCAN: {
+    z: ArrayBufferView;
+    alphaHat: ArrayBufferView;
+    maxZ: number;
+    voxel: number;
+    peakAlpha: number;
+    peakP: number;
+    /**
+     * Transpose and back projection, in milliseconds — or `-1` in the browser.
+     *
+     * `wasm32-unknown-unknown` has no `Instant::now`, so the scan runs untimed
+     * there. Reporting a measured `0` would read as "too fast to measure" when
+     * the truth is "not measured at all", and the spec §6.5 budget is about the
+     * correlation, so a fabricated zero would be exactly the wrong answer.
+     */
+    setupMs: number;
+    correlateMs: number;
+  };
   LEE_CALIB: { globalPValues: ArrayBufferView };
   MCMC: { samples: ArrayBufferView; logEvidence: number | null };
   DESIGN: { utility: ArrayBufferView; greedyOrder: number[] };

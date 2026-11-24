@@ -15,6 +15,24 @@
 
 import type { PayloadOf, Results, TaskEvent, TaskRequest } from './protocol.ts';
 
+/**
+ * The `Z` field a scan returns, before the handler transfers it.
+ *
+ * `Results.SCAN` widens the fields to `ArrayBufferView` because the contract
+ * cannot promise which typed array arrives; here they are known to be `f32`,
+ * because the core allocates them.
+ */
+export interface ScanField {
+  z: Float32Array;
+  alphaHat: Float32Array;
+  maxZ: number;
+  voxel: number;
+  peakAlpha: number;
+  peakP: number;
+  setupMs: number;
+  correlateMs: number;
+}
+
 /** The façade, narrowed to the tasks a worker runs. */
 export interface ComputeCore {
   /** Assembles the path-length operator; the scene crosses as the §8.1 document. */
@@ -47,6 +65,11 @@ export interface ComputeCore {
     paramValues: number[],
     iterations: number,
   ): { density: Float32Array; iterations: number; objective?: number };
+  /**
+   * The A6 score scan over stored counts. `scalesVoxels` are the template radii,
+   * in voxels; the field and the amplitude map both come back for transferring.
+   */
+  scan(countsKey: string, scalesVoxels: number[], profileNuisances: boolean): ScanField;
 }
 
 /**
@@ -181,6 +204,34 @@ export function handleTask(core: ComputeCore, request: TaskRequest): TaskEvent {
             objective: outcome.objective ?? null,
           },
           transfer: [transferable(density)],
+        };
+      }
+      case 'SCAN': {
+        const payload = request.payload as PayloadOf<'SCAN'>;
+        const outcome = core.scan(
+          payload.countsKey,
+          payload.scalesVoxels,
+          payload.profileNuisances,
+        );
+        // Both arrays are read once, for the same reason the density is: a wasm
+        // getter converts the vector on every call, and a second read would give
+        // the transfer list a buffer nobody is looking at.
+        const z = outcome.z;
+        const alphaHat = outcome.alphaHat;
+        return {
+          id,
+          type: 'result',
+          result: {
+            z,
+            alphaHat,
+            maxZ: outcome.maxZ,
+            voxel: outcome.voxel,
+            peakAlpha: outcome.peakAlpha,
+            peakP: outcome.peakP,
+            setupMs: outcome.setupMs,
+            correlateMs: outcome.correlateMs,
+          },
+          transfer: [transferable(z), transferable(alphaHat)],
         };
       }
       default:

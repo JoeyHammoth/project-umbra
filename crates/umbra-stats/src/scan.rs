@@ -46,7 +46,9 @@
 //! two-sided `χ²₁` value instead is the classic mistake here: it doubles the
 //! significance of every candidate.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 
 use umbra_core::{Csr, GridAny};
 use umbra_forward::System;
@@ -293,14 +295,36 @@ pub fn scan(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> ScanResult {
 /// no template had support, which the Euler characteristic treats as below
 /// threshold.
 pub fn z_map(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> Vec<f32> {
-    let mut map = vec![0.0f32; problem.system.voxel_count()];
+    z_and_alpha_map(problem, cfg).0
+}
+
+/// `Z` and `α̂` at every voxel, from one sweep.
+///
+/// Same map as [`z_map`], with the amplitude the peak scale fitted at each
+/// position alongside it. The app draws both: a map of `Z` alone shows *where* a
+/// void might be, and `α̂` is what says how much density the template claims is
+/// missing there — which is the difference between a faint fluctuation and a
+/// chamber, at the same significance.
+///
+/// Both come from one walk of the candidate set, because two sweeps would be two
+/// chances to disagree about which scale won a voxel.
+///
+pub fn z_and_alpha_map(problem: &ScanProblem<'_>, cfg: &ScanConfig) -> (Vec<f32>, Vec<f32>) {
+    let voxels = problem.system.voxel_count();
+    let mut map = vec![0.0f32; voxels];
+    let mut alpha = vec![0.0f32; voxels];
+    let (lo, hi) = (
+        f64::from(cfg.alpha_bounds[0]),
+        f64::from(cfg.alpha_bounds[1]).max(f64::from(cfg.alpha_bounds[0])),
+    );
     sweep(problem, cfg, |voxel, _scale, u, i| {
         let z = u as f32 / i.sqrt();
         if z.is_finite() && z > map[voxel] {
             map[voxel] = z;
+            alpha[voxel] = (u / f64::from(i)).clamp(lo, hi) as f32;
         }
     });
-    map
+    (map, alpha)
 }
 
 /// One pass of the banded score loop with the per-candidate consumer injected.
@@ -312,14 +336,14 @@ where
     F: FnMut(usize, usize, f64, f32),
 {
     check_problem(problem);
-    let clock = Instant::now();
+    let started = clock();
     let bank = TemplateBank::new(&problem.system.grid, &cfg.scales_voxels);
     let transposed = transpose(&problem.system.l, problem.system.voxel_count());
     let back = back_projection(problem);
     let weights = ray_weights(problem);
     let mut band = Band::new();
-    let setup = clock.elapsed();
-    let correlating = Instant::now();
+    let setup = elapsed(started);
+    let correlating = clock();
 
     let (full, dim) = match &problem.system.grid {
         GridAny::Two(g) => ([g.n[0] as usize, g.n[1] as usize, 1], 2),
@@ -405,7 +429,7 @@ where
     }
     ScanTiming {
         setup,
-        correlate: correlating.elapsed(),
+        correlate: elapsed(correlating),
     }
 }
 
@@ -507,6 +531,36 @@ pub(crate) fn erfc(x: f64) -> f64 {
     } else {
         1.0 + erf
     }
+}
+
+/// Starts a timing segment, where this build has a clock.
+///
+/// `Instant::now` has no implementation on `wasm32-unknown-unknown` and panics
+/// there, which a `panic = "abort"` module turns into a bare `unreachable` that
+/// kills the worker. Timing is diagnostic — no result depends on it — so the
+/// browser build carries no clock at all, and the boundary reports the resulting
+/// zero as "not measured" rather than as a measurement.
+#[cfg(not(target_arch = "wasm32"))]
+fn clock() -> Option<Instant> {
+    Some(Instant::now())
+}
+
+/// The browser's answer to [`clock`]: there is none.
+#[cfg(target_arch = "wasm32")]
+fn clock() -> Option<()> {
+    None
+}
+
+/// How long a segment took, or zero when the segment was never started.
+#[cfg(not(target_arch = "wasm32"))]
+fn elapsed(start: Option<Instant>) -> Duration {
+    start.map_or(Duration::ZERO, |started| started.elapsed())
+}
+
+/// The browser's [`elapsed`]: nothing was timed.
+#[cfg(target_arch = "wasm32")]
+fn elapsed(_start: Option<()>) -> Duration {
+    Duration::ZERO
 }
 
 fn check_problem(problem: &ScanProblem<'_>) {
