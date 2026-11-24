@@ -10,7 +10,7 @@
     "build:wasm": "node scripts/build-wasm.mjs",
     "build": "npm run build:wasm && tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/compute/bus.test.ts src/compute/handler.test.ts src/compute/cache.test.ts src/ramp.test.ts",
+    "test": "node --test src/compute/bus.test.ts src/compute/handler.test.ts src/compute/cache.test.ts src/ramp.test.ts src/plot.test.ts",
     "check:browser": "node scripts/check-browser.mjs",
     "preview": "vite preview"
   },

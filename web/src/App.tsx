@@ -25,6 +25,15 @@ const LEE_TOYS = 200;
 /** Where the Euler characteristic is measured, in sigma. */
 const LEE_U0 = 2.5;
 
+/**
+ * Toy counts the page offers.
+ *
+ * The coarse end answers "is this peak ordinary?" in milliseconds; the fine end
+ * costs more and buys a smaller Monte Carlo step. The measured cost is printed
+ * beside the control, so the trade is visible instead of assumed.
+ */
+const TOY_CHOICES = [50, 200, 500, 1000];
+
 /** Seconds as hours, which is how a muon exposure is usually quoted. */
 function formatExposure(seconds: number): string {
   return `${(seconds / 3600).toFixed(1)} h`;
@@ -58,6 +67,8 @@ type BuildState =
         maxToyZ: number;
         zAt3Sigma: number | null;
         toysAboveU0: number;
+        /** Global `p` at 0, 0.05, …, 6σ, for the drawn curve. */
+        curve: Float32Array;
         /** Round trip of the calibration, measured here because wasm has no clock. */
         ms: number;
       };
@@ -120,6 +131,7 @@ export function App() {
   const [cache, setCache] = useState<CacheKind | null>(null);
   const [requested, setRequested] = useState(DEFAULT_EXPOSURE);
   const [exposure, setExposure] = useState(DEFAULT_EXPOSURE);
+  const [leeToys, setLeeToys] = useState(LEE_TOYS);
   const started = useRef<Promise<BrowserCompute> | null>(null);
 
   /** One bus for the page's lifetime: a slider move must not spawn a new pool. */
@@ -214,7 +226,7 @@ export function App() {
         const leePayload = {
           countsKey,
           scalesVoxels: [1, 2],
-          toys: LEE_TOYS,
+          toys: leeToys,
           u0: LEE_U0,
         };
         const leeStarted = performance.now();
@@ -251,6 +263,7 @@ export function App() {
               maxToyZ: lee.maxToyZ as number,
               zAt3Sigma: lee.zAt3Sigma as number | null,
               toysAboveU0: lee.toysAboveU0 as number,
+              curve: lee.globalPValues as Float32Array,
               ms: leeMs,
             },
           });
@@ -267,7 +280,9 @@ export function App() {
     return () => {
       live = false;
     };
-  }, [exposure]);
+    // A new toy count re-runs the calibration. Everything upstream shares a
+    // content key, so the bus answers from cache and only the toys are computed.
+  }, [exposure, leeToys]);
 
   const shown = state.status === 'ok' ? state : null;
 
@@ -299,6 +314,9 @@ export function App() {
               ? `A6 score scan of the same data, Z peak ${shown.peakZ.toFixed(2)} at voxel ${shown.peakVoxel}. The panel is fixed at 0–5σ, so brightness is comparable across exposures; the default scene's own data is H0, and this null is the honest result.`
               : 'Waiting for the scan…'
           }
+          globalP={shown?.lee.curve ?? null}
+          leePeakZ={shown?.lee.peakZ ?? 0}
+          leeToys={shown?.lee.toys ?? 0}
         />
         {shown ? (
           <p
@@ -308,6 +326,7 @@ export function App() {
             data-peak-z={shown.lee.peakZ}
             data-global-p={shown.lee.globalPAtPeak}
           >
+            {shown.lee.toys === leeToys ? '' : `Recalibrating with ${leeToys} toys… `}
             Look-elsewhere: the scan's local peak of {shown.lee.peakZ.toFixed(2)}σ was
             matched or beaten by {shown.lee.toysAtOrAbovePeak} of {shown.lee.toys}{' '}
             background-only toys, so its global <em>p</em> is{' '}
@@ -319,6 +338,23 @@ export function App() {
             The {shown.lee.toys} toys took {Math.round(shown.lee.ms)} ms here, round trip.
           </p>
         ) : null}
+        <label className="toys">
+          <span>Look-elsewhere toys</span>
+          <select
+            data-testid="toys"
+            value={leeToys}
+            onChange={(event) => setLeeToys(Number(event.target.value))}
+          >
+            {TOY_CHOICES.map((count) => (
+              <option key={count} value={count}>
+                {count}
+              </option>
+            ))}
+          </select>
+          <output data-testid="toys-ms">
+            {shown && shown.lee.toys === leeToys ? `${Math.round(shown.lee.ms)} ms` : '…'}
+          </output>
+        </label>
         <label className="exposure">
           <span>Exposure</span>
           <input
