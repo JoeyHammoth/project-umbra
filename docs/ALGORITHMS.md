@@ -286,15 +286,35 @@ the `− C` term on a block with a column removed (a count without it reads 1 an
 calls a tunnel a ball), and `the_extrapolation_holds_on_a_volume` runs the whole
 chain — Poisson toys, scan, `χ`, extrapolation — on a `16³` scene.
 
+The criterion the campaign exists to settle now has an answer at its own size.
+3 × 10⁵ toys on the plane
+([`docs/calibration/lee-2d-3e5.md`](calibration/lee-2d-3e5.md)) put 426 over the
+model's 4.87σ threshold — rate 1.420e-3, 5% above nominal, Wilson 95%
+[1.291e-3, 1.561e-3], inside the ±20% band — while the extrapolation held to
+1.01× at 3σ. That run cost 5.2 hours on sixteen threads over `10⁶` voxels and
+scaled only 6.4× over four, which is why the gate sizes its follow-ups instead of
+raising the toy count by habit.
+
 The campaign now acts on its own result rather than waiting for a reader. Its
 report ends with a machine-readable verdict line, `tools/lee-verdict.sh` reads
-it, and the campaign job dispatches the `10⁵` confirmation when a `10⁴` run
-reports UNDECIDED (a confirmation never dispatches another, and the weekly
-scheduled run only reports) and opens an issue when a run with at least as many
-toys in the same dimension changes
-[`docs/calibration/recorded-verdict.txt`](calibration/recorded-verdict.txt). The
-comparison is gated on toys and dimension because a smaller sample cannot
-overturn a larger decision and a volume is a different search space.
+it, and the campaign job sizes its confirmation from the report's `needs` field
+— the toys the Wilson interval would need before it fits ±20% — rather than from
+a constant, because the two dimensions need very different samples: a 2-D `10⁴`
+run is about `7 × 10⁴` toys short, while a 3-D run whose point estimate sits near
+a band edge needs millions and would only repeat itself at any affordable size.
+The dispatch is capped at `3 × 10⁵`, the ~230 minutes the job's timeout allows at
+the measured 46 ms/toy, and three conditions stop it looping: a confirmation
+never confirms itself, a scheduled run only reports, and a sample that already
+decides asks for nothing.
+
+`tools/lee-compare.sh` compares the run with
+[`docs/calibration/recorded-verdict.txt`](calibration/recorded-verdict.txt),
+which holds one line per search dimension: the gate looks the dimension up
+rather than assuming the plane, so a volume campaign can record and defend its
+own verdict, and a dimension with no line is created by its first *decisive*
+verdict rather than by an undecided run. A run with fewer toys than its
+dimension's line cannot overturn it, and one that can opens an issue instead of
+leaving the change in a log.
 
 `cargo bench -p umbra-stats --bench lee` runs the campaign itself. On the 200²
 scene with 200 toys, the anchor is no longer a factor-of-three decision:

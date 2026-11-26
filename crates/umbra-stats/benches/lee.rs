@@ -4,9 +4,9 @@
 //! Defaults are the campaign the spec asks for — `1000²` voxels (`10⁶`) and `10⁴`
 //! toys — because this is the run that produces the published report. M3's rate
 //! criterion is decided at the end of the report, from the Wilson interval of the
-//! exceedances: `10⁴` toys straddle the ±20% band around nominal 3σ, so the
-//! campaign has to be run at `10⁵` (~70 min on a CI runner) before that box can
-//! move.
+//! exceedances, and the report also says how many toys that interval would need
+//! before it fits the band. On the plane `10⁴` toys are about `7 × 10⁴` short,
+//! which is the number the CI gate dispatches rather than a constant.
 //!
 //! `UMBRA_LEE_DIM=3` runs the same campaign on a volume, so the upcrossing law
 //! is measured where an excursion is a sheet a ray cuts through rather than a
@@ -23,7 +23,7 @@
 //! UMBRA_LEE_TOYS     toy count, default 10 000
 //! UMBRA_LEE_U0       Euler anchor in sigma, default 2.5
 //! UMBRA_LEE_THREADS  worker threads, default all cores
-//! UMBRA_LEE_SEED     toy seed, default 0x00C0FFEE
+//! UMBRA_LEE_SEED     toy seed, hex (`0x…`) or decimal, default 0x00C0FFEE
 //! UMBRA_LEE_REPORT   write the markdown report here as well as to stdout
 //! ```
 //!
@@ -39,7 +39,8 @@ use std::time::Instant;
 use umbra_core::{Csr, Grid2, Grid3, GridAny};
 use umbra_forward::{RayCell, System};
 use umbra_stats::{
-    chi2_mixture_p, lee_calibrate_with, rate_estimate, LeeConfig, ScanConfig, ScanProblem,
+    chi2_mixture_p, lee_calibrate_with, rate_estimate, toys_to_decide, LeeConfig, ScanConfig,
+    ScanProblem,
 };
 
 /// The spec's nominal 3σ false-positive rate (§7): a correct global `p` curve
@@ -133,12 +134,38 @@ fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
         .unwrap_or(default)
 }
 
+/// A seed knob takes `0x`-prefixed hex or decimal.
+///
+/// `env_or` parses through `FromStr`, which reads decimal only, so a documented
+/// default written as `0x00C0FFEE` and a seed passed as `0x…` were two different
+/// things: the knob silently fell back to the default and the report then named a
+/// seed the caller had not run. A campaign whose seed is not the one asked for is
+/// a sample nobody can reproduce, so a value that does not parse is an error here
+/// rather than a default.
+fn seed_or_default(key: &str, default: u64) -> u64 {
+    let Ok(text) = std::env::var(key) else {
+        return default;
+    };
+    let trimmed = text.trim();
+    let parsed = match trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        Some(hex) => u64::from_str_radix(hex, 16),
+        None => trimmed.parse(),
+    };
+    match parsed {
+        Ok(seed) => seed,
+        Err(error) => panic!("{key}={text:?} is not a seed: {error}"),
+    }
+}
+
 fn main() {
     let dim: u8 = env_or("UMBRA_LEE_DIM", 2);
     let n: usize = env_or("UMBRA_LEE_GRID", if dim == 3 { 40 } else { 1000 });
     let toys: u32 = env_or("UMBRA_LEE_TOYS", 10_000);
     let u0: f32 = env_or("UMBRA_LEE_U0", 2.5);
-    let seed: u64 = env_or("UMBRA_LEE_SEED", 0x00c0_ffee_u64);
+    let seed: u64 = seed_or_default("UMBRA_LEE_SEED", 0x00c0_ffee_u64);
     let threads: usize = env_or(
         "UMBRA_LEE_THREADS",
         std::thread::available_parallelism().map_or(1, |t| t.get()),
@@ -207,6 +234,13 @@ fn main() {
             .count() as u32
     });
     let estimate = rate_estimate(exceedances, toys);
+    // What this campaign would need to decide, so a run that cannot answer the
+    // question says what would rather than leaving the next reader to work it out
+    // from the interval. This is what the CI gate sizes its confirmation run by:
+    // a sample that is 5% off nominal needs ~1.2× its toys, and one 19% off needs
+    // fifty times them, which is a fact worth printing instead of discovering
+    // after another campaign.
+    let needs = toys_to_decide(estimate, NOMINAL_3_SIGMA, 0.20, toys);
     let verdict = if estimate.inside(NOMINAL_3_SIGMA, 0.20) {
         "PASS"
     } else if estimate.outside(NOMINAL_3_SIGMA, 0.20) {
@@ -290,7 +324,7 @@ fn main() {
     }
     let _ = writeln!(
         report,
-        "\n## M3 criterion (spec §10.3): global false-positive rate at 3σ\n\n| | |\n|---|---|\n| Model 3σ threshold | {} |\n| Exceedances | {exceedances} of {toys} |\n| Empirical rate | {:.3e} |\n| 95% interval (Wilson) | [{:.3e}, {:.3e}] |\n| Nominal band (±20%) | [{:.3e}, {:.3e}] |\n| Verdict | **{verdict}** |",
+        "\n## M3 criterion (spec §10.3): global false-positive rate at 3σ\n\n| | |\n|---|---|\n| Model 3σ threshold | {} |\n| Exceedances | {exceedances} of {toys} |\n| Empirical rate | {:.3e} |\n| 95% interval (Wilson) | [{:.3e}, {:.3e}] |\n| Nominal band (±20%) | [{:.3e}, {:.3e}] |\n| Toys to decide | {} |\n| Verdict | **{verdict}** |",
         model_3sigma.map_or("not reached by z = 6".to_string(), |threshold| format!(
             "z = {threshold:.2}"
         )),
@@ -298,7 +332,21 @@ fn main() {
         estimate.low,
         estimate.high,
         NOMINAL_3_SIGMA * 0.8,
-        NOMINAL_3_SIGMA * 1.2
+        NOMINAL_3_SIGMA * 1.2,
+        needs.map_or_else(
+            || if estimate.inside(NOMINAL_3_SIGMA, 0.20) {
+                "already decided by this sample".to_string()
+            } else {
+                "none — the rate itself is outside the band".to_string()
+            },
+            |needed| {
+                if needed <= toys {
+                    format!("{needed} (already decided by this sample)")
+                } else {
+                    format!("~{needed} (this sample decides nothing)")
+                }
+            }
+        ),
     );
     if verdict == "UNDECIDED" {
         let _ = writeln!(
@@ -319,11 +367,12 @@ fn main() {
     // HTML comment keeps the line out of the rendered report.
     let _ = writeln!(
         report,
-        "\n<!-- lee-verdict verdict={verdict} toys={toys} dim={dim} rate={:.3e} low={:.3e} high={:.3e} threshold={} -->",
+        "\n<!-- lee-verdict verdict={verdict} toys={toys} dim={dim} rate={:.3e} low={:.3e} high={:.3e} threshold={} needs={} -->",
         estimate.rate,
         estimate.low,
         estimate.high,
         model_3sigma.map_or("none".to_string(), |threshold| format!("{threshold:.2}")),
+        needs.map_or("none".to_string(), |needed| needed.to_string()),
     );
 
     print!("{report}");

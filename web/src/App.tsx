@@ -5,6 +5,8 @@ import { TaskFailure, contentKey } from './compute/bus';
 import { createBrowserCompute } from './compute/compute';
 import type { BrowserCompute, CacheKind } from './compute/compute';
 import { PIPELINE_STAGES } from './compute/protocol';
+import { NOMINAL_3_SIGMA } from './plot';
+import { recordedVerdict } from './recorded';
 import { emptyTail, wilsonInterval } from './resolution';
 import sceneJson from './scenes/default.json?raw';
 
@@ -34,6 +36,11 @@ const LEE_U0 = 2.5;
  * beside the control, so the trade is visible instead of assumed.
  */
 const TOY_CHOICES = [50, 200, 500, 1000];
+
+/** A rate as `1.28e-3`, the way the campaign report quotes it. */
+function formatRate(rate: number): string {
+  return rate.toExponential(2);
+}
 
 /** Seconds as hours, which is how a muon exposure is usually quoted. */
 function formatExposure(seconds: number): string {
@@ -355,6 +362,28 @@ export function App() {
               ? `No toy reached the ${LEE_U0}σ Euler anchor, so no extrapolated 3σ threshold is quoted.`
               : `Extrapolated from the ${shown.lee.toysAboveU0} toys above ${LEE_U0}σ (mean χ = ${shown.lee.meanEulerAtU0.toFixed(2)} ± ${shown.lee.eulerStderr.toFixed(2)}), a global 3σ would need ${shown.lee.zAt3Sigma.toFixed(2)}σ.`}{' '}
             The {shown.lee.toys} toys took {Math.round(shown.lee.ms)} ms here, round trip.
+          </p>
+        ) : null}
+        {recordedVerdict ? (
+          <p
+            className="detail"
+            data-testid="lee-record"
+            data-verdict={recordedVerdict.verdict}
+          >
+            The campaign behind that number is not this page's:{' '}
+            {recordedVerdict.toys.toLocaleString('en-US')} background-only toys through
+            the same scan in CI give a global rate of{' '}
+            {formatRate(recordedVerdict.rate)} (95% [{formatRate(recordedVerdict.low)},{' '}
+            {formatRate(recordedVerdict.high)}]) against nominal{' '}
+            {formatRate(NOMINAL_3_SIGMA)} ± 20%
+            {recordedVerdict.threshold === null
+              ? ''
+              : `, so a global 3σ sits at ${recordedVerdict.threshold.toFixed(2)}σ there`}
+            : <strong>{recordedVerdict.verdict.toLowerCase()}</strong>
+            {recordedVerdict.verdict === 'UNDECIDED'
+              ? ' — the interval straddles the band, so that sample does not decide the criterion yet.'
+              : ` — the interval sits ${recordedVerdict.verdict === 'PASS' ? 'inside' : 'outside'} the band.`}{' '}
+            <code>docs/calibration/recorded-verdict.txt</code> holds the line this quotes.
           </p>
         ) : null}
         <label className="toys">
