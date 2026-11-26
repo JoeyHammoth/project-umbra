@@ -222,6 +222,43 @@ impl RateEstimate {
     }
 }
 
+/// How many toys a campaign would need before its interval fits the band.
+///
+/// A verdict on a rate is decided by whether the whole 95% interval sits inside
+/// `nominal ± tolerance`, not by the point estimate, so a campaign that cannot
+/// decide should say what it would take. Wilson's half-width falls as `1/√n`, so
+/// `n_needed = n (half / margin)²`, where `margin` is the distance from the point
+/// estimate to the nearer band edge: a rate 5% below nominal needs a smaller
+/// sample than one 19% below it, because the second has almost no room on that
+/// side of the band.
+///
+/// `None` when the point estimate is itself outside the band: no sample size
+/// rescues that, and the verdict is `FAIL` rather than undecided. The estimate is
+/// approximate by construction — it evaluates the Wilson width at the current
+/// `n` and assumes the rate stays put, which is what makes it a budget instead of
+/// a promise.
+///
+/// # Panics
+///
+/// Panics if `toys` is zero.
+pub fn toys_to_decide(
+    estimate: RateEstimate,
+    nominal: f64,
+    tolerance: f64,
+    toys: u32,
+) -> Option<u32> {
+    assert!(toys > 0, "a rate needs at least one draw");
+    let low = nominal * (1.0 - tolerance);
+    let high = nominal * (1.0 + tolerance);
+    let margin = (estimate.rate - low).min(high - estimate.rate);
+    if margin <= 0.0 {
+        return None;
+    }
+    let half = 0.5 * (estimate.high - estimate.low);
+    let scaled = f64::from(toys) * (half / margin).powi(2);
+    Some(scaled.ceil().max(1.0) as u32)
+}
+
 /// Wilson score interval for `exceedances / toys` at 95%.
 ///
 /// Wilson rather than the textbook normal interval because the rates here are
@@ -979,6 +1016,33 @@ mod tests {
         assert!(
             (0.80..0.95).contains(&p3),
             "3σ global p {p3:.3} is not a probability the toys corroborate"
+        );
+    }
+
+    #[test]
+    fn the_toys_a_campaign_needs_scale_with_the_interval_over_the_margin() {
+        // The 10⁵ campaign of the corrected model: 128 of 100 000, Wilson
+        // [1.077e-3, 1.522e-3], point 1.280e-3 — 5% below nominal, so the floor
+        // is the binding edge with 2.0e-4 of room on it, and the interval is
+        // about 2.2e-4 wide each way. Squaring the ratio says ~1.2e5.
+        let estimate = rate_estimate(128, 100_000);
+        let needed = toys_to_decide(estimate, 1.35e-3, 0.20, 100_000).expect("the point is inside");
+        assert!((100_000..200_000).contains(&needed), "needed {needed}");
+        // A point outside the band cannot be rescued by toys: that is a FAIL, and
+        // saying so is the difference between "run longer" and "the model is
+        // wrong".
+        assert_eq!(
+            toys_to_decide(rate_estimate(200, 100_000), 1.35e-3, 0.20, 100_000),
+            None
+        );
+        // A sample that already fits asks for no more, which is what stops the
+        // confirmation dispatch on a sample that has decided.
+        let at_nominal = rate_estimate(135, 100_000);
+        assert!(at_nominal.inside(1.35e-3, 0.20));
+        let needed = toys_to_decide(at_nominal, 1.35e-3, 0.20, 100_000).expect("inside");
+        assert!(
+            needed < 100_000,
+            "a sample that already fits asks for {needed} toys"
         );
     }
 
