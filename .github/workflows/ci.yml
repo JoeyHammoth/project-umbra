@@ -180,9 +180,12 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      # The scene size is the bench's per-dimension default (1000² in 2-D, 40³ in
+      # The scene size is the bench's per-dimension default (1000² in 2-D, 24³ in
       # 3-D) rather than a workflow constant: 1000³ is 10⁹ voxels and no campaign
-      # here reaches it, so a pinned side would be wrong for one of the two.
+      # here reaches it, so a pinned side would be wrong for one of the two. The
+      # volume side is the small one on purpose — at 2.2 ms/toy a 10⁶-toy volume
+      # run decides its own criterion in half an hour, where the 40³ scene needed
+      # ~10⁷ toys and so could only ever report that it fell short.
       - name: Run the LEE campaign
         env:
           UMBRA_LEE_DIM: ${{ github.event.inputs.lee_dim || '2' }}

@@ -25,6 +25,11 @@ export interface RecordedVerdict {
   high: number;
   /** The model's 3σ threshold in sigma; null if the model never reached it. */
   threshold: number | null;
+  /**
+   * Toys the interval would need before it fits the band; null when no sample
+   * size decides it, because the point estimate is itself outside the band.
+   */
+  needs: number | null;
 }
 
 /**
@@ -50,6 +55,7 @@ export function parseRecordedVerdict(text: string): RecordedVerdict[] {
     const low = Number(fields.get('low'));
     const high = Number(fields.get('high'));
     const threshold = Number(fields.get('threshold'));
+    const needs = Number(fields.get('needs'));
     if (!Number.isFinite(toys) || !Number.isFinite(dim) || !Number.isFinite(rate)) {
       continue;
     }
@@ -61,6 +67,9 @@ export function parseRecordedVerdict(text: string): RecordedVerdict[] {
       low: Number.isFinite(low) ? low : rate,
       high: Number.isFinite(high) ? high : rate,
       threshold: Number.isFinite(threshold) ? threshold : null,
+      // `needs=none` means no sample size helps, which is not the same as a
+      // number: rendering `NaN` toys would invent a campaign that cannot work.
+      needs: Number.isFinite(needs) ? needs : null,
     });
   }
   return entries;

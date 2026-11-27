@@ -34,6 +34,22 @@ test('a truncated or unparseable line is skipped rather than rendered as NaN', (
   assert.deepEqual(entries, []);
 });
 
+test('the toys a sample still needs are carried through, including none at all', () => {
+  const entries = parseRecordedVerdict(
+    'verdict=UNDECIDED toys=20000 dim=3 rate=1.1e-3 low=7e-4 high=1.6e-3 needs=11008000\n' +
+      'verdict=FAIL toys=1000 dim=2 rate=2e-3 needs=none\n' +
+      'verdict=PASS toys=300000 dim=2 rate=1.42e-3 needs=136483\n',
+  );
+  assert.equal(entries[0]!.needs, 11_008_000, 'a number is a budget, not an absence');
+  assert.equal(entries[1]!.needs, null, 'no sample size helps, which is not `0`');
+  assert.equal(entries[2]!.needs, 136_483);
+});
+
+test('a sample that decides asks for no more toys than it has', () => {
+  const [entry] = parseRecordedVerdict('verdict=PASS toys=300000 dim=2 rate=1.42e-3 needs=136483\n');
+  assert.ok(entry!.needs! <= entry!.toys, 'the page reads this as "decided"');
+});
+
 test('an interval missing its ends is reported at the point, not at infinity', () => {
   const [entry] = parseRecordedVerdict('verdict=PASS toys=10 dim=2 rate=1.35e-3\n');
   assert.equal(entry!.low, 1.35e-3);

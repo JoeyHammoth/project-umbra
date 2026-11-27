@@ -6,7 +6,7 @@ import { createBrowserCompute } from './compute/compute';
 import type { BrowserCompute, CacheKind } from './compute/compute';
 import { PIPELINE_STAGES } from './compute/protocol';
 import { NOMINAL_3_SIGMA } from './plot';
-import { recordedVerdict } from './recorded';
+import { recordedVerdict, recordedVerdicts } from './recorded';
 import { emptyTail, wilsonInterval } from './resolution';
 import sceneJson from './scenes/default.json?raw';
 
@@ -385,6 +385,52 @@ export function App() {
               : ` — the interval sits ${recordedVerdict.verdict === 'PASS' ? 'inside' : 'outside'} the band.`}{' '}
             <code>docs/calibration/recorded-verdict.txt</code> holds the line this quotes.
           </p>
+        ) : null}
+        {recordedVerdicts.length > 0 ? (
+          <table className="detail" data-testid="lee-records">
+            <caption>
+              The M3 rate criterion, one row per search space. A plane and a volume
+              are different searches, so each is decided — or not — by its own
+              campaign; the last column is what that campaign says it would still
+              need, which is why the volume is not simply "more toys than the
+              plane".
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Search</th>
+                <th scope="col">Toys</th>
+                <th scope="col">Rate at 3σ (95%)</th>
+                <th scope="col">To decide</th>
+                <th scope="col">Verdict</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recordedVerdicts.map((entry) => (
+                <tr key={entry.dim} data-testid={`lee-record-${entry.dim}d`}>
+                  <td>
+                    {entry.dim === 2
+                      ? 'plane (2-D)'
+                      : entry.dim === 3
+                        ? 'volume (3-D)'
+                        : `${entry.dim}-D`}
+                  </td>
+                  <td>{entry.toys.toLocaleString('en-US')}</td>
+                  <td>
+                    {formatRate(entry.rate)} [{formatRate(entry.low)},{' '}
+                    {formatRate(entry.high)}]
+                  </td>
+                  <td>
+                    {entry.needs === null
+                      ? 'no sample size — the rate is outside the band'
+                      : entry.needs <= entry.toys
+                        ? 'decided by this sample'
+                        : `~${entry.needs.toLocaleString('en-US')} toys`}
+                  </td>
+                  <td>{entry.verdict}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         ) : null}
         <label className="toys">
           <span>Look-elsewhere toys</span>
