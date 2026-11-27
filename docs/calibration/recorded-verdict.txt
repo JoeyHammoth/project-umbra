@@ -2,7 +2,7 @@
 #
 # A campaign run compares itself against the line for its own dimension: a
 # volume and a plane are different search spaces (the model's 3σ threshold is
-# 4.87σ at 1000² and 5.05σ at 40³), so a rate from one cannot decide the other.
+# 4.87σ at 1000² and 4.81σ at 24³), so a rate from one cannot decide the other.
 # A run whose dimension has no line creates one only if it is decisive. Within a
 # dimension, a result is comparable only when it has at least as many toys.
 #
@@ -14,12 +14,14 @@
 # [1.291e-3, 1.561e-3] inside the ±20% band, so the criterion is decided and M3's
 # box is checked. It replaces the 10⁵ line (128 of 100 000, floor 0.3% short),
 # which could not decide.
-verdict=PASS toys=300000 dim=2 rate=1.420e-3 low=1.291e-3 high=1.561e-3 threshold=4.87
+verdict=PASS toys=300000 dim=2 rate=1.420e-3 low=1.291e-3 high=1.561e-3 threshold=4.87 needs=136483
 #
-# 3-D: `docs/calibration/lee-3d-40-2e4.md` — 20 000 toys on the 40³ volume, where
-# the law holds to 1.02–1.15× from 3σ to 5σ. The rate at the model's own 5.05σ
-# threshold is 19% below nominal with an interval from 0.73e-3 to 1.67e-3, so this
-# sample cannot decide the 3-D criterion either, and the report's `needs` says it
-# would take ~10⁷ toys: it is recorded so that the gate compares a volume against a
-# volume, and stays UNDECIDED rather than being closed by the plane's PASS.
-verdict=UNDECIDED toys=20000 dim=3 rate=1.100e-3 low=7.266e-4 high=1.665e-3 threshold=5.05
+# 3-D: `docs/calibration/lee-3d-24-1e6.md` — 10⁶ toys on the 24³ volume, where a
+# toy costs 2.2 ms and the law holds to 1.05–1.12× from 3σ to 5σ. 1233 toys clear
+# the model's 4.81σ threshold: rate 1.233e-3, Wilson [1.166e-3, 1.304e-3] inside the
+# ±20% band, so the volume's criterion is decided too, and its `needs` (202 245) is
+# a fifth of the sample. It replaces the 40³ 20 000-toy record
+# (`lee-3d-40-2e4.md`), which stayed UNDECIDED because its point sat 1.8% inside
+# the band floor and its interval would have needed ~1.1 × 10⁷ toys — the volume
+# scene is now the one a campaign can afford to decide.
+verdict=PASS toys=1000000 dim=3 rate=1.233e-3 low=1.166e-3 high=1.304e-3 threshold=4.81 needs=202245

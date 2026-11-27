@@ -273,15 +273,28 @@ toys are merged in reverse order.
 The law was only ever checked on a plane until the campaign learned a dimension
 knob, and a plane is a weak test of it: there an excursion is a strip the ray
 runs along, while in a volume it is a sheet the ray cuts through, and the `χ`
-closure carries one more term. `UMBRA_LEE_DIM=3` runs the same bench on `40³`
-voxels (`1600` rays, one per column), and
+closure carries one more term. `UMBRA_LEE_DIM=3` runs the same bench on a cube
+with one ray per column, and
 [`docs/calibration/lee-3d-40-2e4.md`](calibration/lee-3d-40-2e4.md) records
-20 000 toys on it: `χ̄(u₀) = 19.60 ± 0.05`, and the model tracks the toys at
+20 000 toys on a `40³` one: `χ̄(u₀) = 19.60 ± 0.05`, and the model tracks the toys at
 1.02×, 1.14×, 1.15×, 1.04× and 1.02× from 3σ to 5σ. The 2 000-toy run before it
 read 1.67× at 4.5σ and 0.61× at 5σ on 21 and 5 exceedances — what a tail looks
 like when the sample, not the model, is the uncertainty. The volume divides the
 search space differently, so its *rates* are not comparable with the plane's; the
-ratio is what the law is being checked on. `euler_counts_a_tunnel_as_zero` pins
+ratio is what the law is being checked on.
+
+The `40³` volume could not decide its own criterion, and that was a budget fact
+rather than a physics one: a toy costs 10.9 ms there, so the `~1.1 × 10⁷` toys its
+interval would need is 32 hours on sixteen threads. The volume default is
+therefore `24³`, where a toy costs 2.2 ms and the extrapolation still stays inside
+the spec's 20% target, and
+[`docs/calibration/lee-3d-24-1e6.md`](calibration/lee-3d-24-1e6.md) spends 42
+minutes on `10⁶` toys: 1233 of them clear the model's 4.81σ threshold — rate
+1.233e-3, Wilson [1.166e-3, 1.304e-3], inside the ±20% band — so the volume's
+rate criterion is **PASS** on its own campaign rather than on the plane's. That
+run's `5σ` row is the first in the campaign's history with toys in it (480 above,
+1.08×), so the extrapolation there is checked rather than quoted.
+`euler_counts_a_tunnel_as_zero` pins
 the `− C` term on a block with a column removed (a count without it reads 1 and
 calls a tunnel a ball), and `the_extrapolation_holds_on_a_volume` runs the whole
 chain — Poisson toys, scan, `χ`, extrapolation — on a `16³` scene.
@@ -300,8 +313,9 @@ report ends with a machine-readable verdict line, `tools/lee-verdict.sh` reads
 it, and the campaign job sizes its confirmation from the report's `needs` field
 — the toys the Wilson interval would need before it fits ±20% — rather than from
 a constant, because the two dimensions need very different samples: a 2-D `10⁴`
-run is about `7 × 10⁴` toys short, while a 3-D run whose point estimate sits near
-a band edge needs millions and would only repeat itself at any affordable size.
+run is about `7 × 10⁴` toys short, while the `40³` volume's 20 000-toy point sat
+1.8% inside its band floor and needed `1.1 × 10⁷` — which is why the volume scene
+shrank to one whose `needs` (202 245) a job can actually run.
 The dispatch is capped at `3 × 10⁵`, the ~230 minutes the job's timeout allows at
 the measured 46 ms/toy, and three conditions stop it looping: a confirmation
 never confirms itself, a scheduled run only reports, and a sample that already

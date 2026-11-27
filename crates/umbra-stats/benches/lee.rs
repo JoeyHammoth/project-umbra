@@ -11,15 +11,20 @@
 //! `UMBRA_LEE_DIM=3` runs the same campaign on a volume, so the upcrossing law
 //! is measured where an excursion is a sheet a ray cuts through rather than a
 //! strip along it. The two dimensions do not share a grid side: `1000³` is `10⁹`
-//! voxels and no campaign budget reaches it, so the volume default is the
-//! largest cube whose per-toy cost still leaves a five-figure campaign inside an
-//! afternoon. Ratios from the two scenes are comparable; rates are not, because
-//! the search space and the ray count per voxel are not.
+//! voxels and no campaign budget reaches it.
+//!
+//! The volume default is `24³` because a volume campaign has to be able to
+//! *decide* its own criterion, and at `40³` it cannot: a toy costs 10.9 ms there,
+//! so the `~10⁷` toys a volume would need is a week, and the criterion stays open
+//! by budget rather than by physics. At `24³` a toy costs 2.2 ms, and the
+//! extrapolation still matches the toys (1.08× at 3σ, 0.97× at 4σ), so `10⁶` toys
+//! is half an hour. Ratios from different scenes are comparable; rates are not,
+//! because the search space and the ray count per voxel are not.
 //! Env knobs:
 //!
 //! ```text
 //! UMBRA_LEE_DIM      search dimension, 2 or 3, default 2
-//! UMBRA_LEE_GRID     scene width, default 1000 (2-D) or 40 (3-D)
+//! UMBRA_LEE_GRID     scene width, default 1000 (2-D) or 24 (3-D)
 //! UMBRA_LEE_TOYS     toy count, default 10 000
 //! UMBRA_LEE_U0       Euler anchor in sigma, default 2.5
 //! UMBRA_LEE_THREADS  worker threads, default all cores
@@ -162,7 +167,7 @@ fn seed_or_default(key: &str, default: u64) -> u64 {
 
 fn main() {
     let dim: u8 = env_or("UMBRA_LEE_DIM", 2);
-    let n: usize = env_or("UMBRA_LEE_GRID", if dim == 3 { 40 } else { 1000 });
+    let n: usize = env_or("UMBRA_LEE_GRID", if dim == 3 { 24 } else { 1000 });
     let toys: u32 = env_or("UMBRA_LEE_TOYS", 10_000);
     let u0: f32 = env_or("UMBRA_LEE_U0", 2.5);
     let seed: u64 = seed_or_default("UMBRA_LEE_SEED", 0x00c0_ffee_u64);

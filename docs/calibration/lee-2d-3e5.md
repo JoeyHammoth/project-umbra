@@ -47,8 +47,9 @@ disturbing the correction that produced the threshold.
 
 The 3-D criterion is untouched by this run: a volume is a different search space
 at a different threshold, and its line in
-[`recorded-verdict.txt`](recorded-verdict.txt) remains UNDECIDED with the reason
-recorded.
+[`recorded-verdict.txt`](recorded-verdict.txt) was UNDECIDED when this run was
+recorded — it has since been decided by the volume's own campaign
+([`lee-3d-24-1e6.md`](lee-3d-24-1e6.md)), not by this one.
 
 Reproduced by `env UMBRA_LEE_TOYS=300000 UMBRA_LEE_SEED=0xc0ffee cargo bench -p
 umbra-stats --bench lee`. The report below is that run's output, verbatim.
