@@ -311,3 +311,117 @@ jobs:
           else
             gh issue create --title "$title" --label spec:umbra --body "$body"
           fi
+
+  # Spec §5.7 asks for 10⁴ draws before a calibration claim is made, and the
+  # recorded campaign (`docs/calibration/sbc-a2-2d.md`) is 100 of them — the size
+  # that was affordable on a laptop, not the size the specification names. At the
+  # 1.7–2.4 s/draw the recorded runs measured, those 10⁴ are 4.7–6.7 hours, over
+  # the limit a six-hour job has on a slower runner, so the campaign runs as four
+  # shards of 2500 draws with their own seeds and reports — 100 minutes each at
+  # the slower measurement, against the 300-minute timeout here. The gate then
+  # reads four verdicts rather than one pooled p; a shard still holds 1.6 million
+  # ranks, so its 1% KS test is no weaker against the failure being looked for.
+  sbc-calibration:
+    name: SBC calibration (shard ${{ matrix.shard }})
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    # Opening an issue is how a moved verdict reaches someone; the report itself
+    # arrives as an artifact either way.
+    permissions:
+      contents: read
+      issues: write
+    # Shards must not cancel each other, and a merge must not cancel a shard:
+    # the run that has spent 70 minutes is the only one with its numbers.
+    concurrency:
+      group: sbc-calibration-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # `--prior majoriser` is the curvature the result card uses. Measuring a
+      # posterior the page never computes would be a calibration of something
+      # nobody ships.
+      - name: Run the campaign shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          seed=$(( 7 + 100 * SHARD ))
+          echo "shard $SHARD, seed $seed, 2500 draws"
+          cargo run --release -p umbra-cli -- sbc \
+            --scene web/src/scenes/default.json \
+            --engine a2 --prior majoriser \
+            --draws 2500 --posterior 100 --seed "$seed" \
+            --report "target/sbc/shard-${SHARD}.md"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbc-calibration-shard-${{ matrix.shard }}
+          path: ${{ github.workspace }}/target/sbc/shard-${{ matrix.shard }}.md
+          retention-days: 90
+          if-no-files-found: warn
+
+      # Read from the report's machine line rather than from the prose, so
+      # rewording a sentence cannot break the gate, and a shard that writes no
+      # line fails here instead of passing quietly.
+      - name: Read the verdict
+        id: verdict
+        run: |
+          set -euo pipefail
+          bash tools/sbc-verdict.sh "target/sbc/shard-${{ matrix.shard }}.md" \
+            | tr ' ' '\n' >> "$GITHUB_OUTPUT"
+          sed -n 's/.*<!-- sbc-verdict \(.*\) -->.*/\1/p' \
+            "target/sbc/shard-${{ matrix.shard }}.md"
+
+      - name: Compare with the recorded verdict
+        id: compare
+        env:
+          PASS: ${{ steps.verdict.outputs.pass }}
+          DRAWS: ${{ steps.verdict.outputs.draws }}
+          ENGINE: ${{ steps.verdict.outputs.engine }}
+        run: |
+          set -euo pipefail
+          if [ "$PASS" = "true" ]; then verdict=PASS; else verdict=FAIL; fi
+          bash tools/sbc-compare.sh docs/calibration/sbc-recorded.txt \
+            "$verdict" "$DRAWS" "$ENGINE" >> "$GITHUB_OUTPUT"
+
+      # A verdict that moved is the one thing this campaign exists to say, so it
+      # says it where someone will see it. An open issue for the same change is
+      # commented on instead of duplicated, because the shards would otherwise
+      # open four identical ones.
+      - name: Open an issue when the verdict changes
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERDICT: ${{ steps.verdict.outputs.pass }}
+          DRAWS: ${{ steps.verdict.outputs.draws }}
+          KS_P: ${{ steps.verdict.outputs.ks_p }}
+          MIN_P: ${{ steps.verdict.outputs.min_p }}
+          FAIL: ${{ steps.verdict.outputs.fail }}
+          ENGINE: ${{ steps.verdict.outputs.engine }}
+          SHARD: ${{ matrix.shard }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="SBC calibration verdict moved for engine $ENGINE"
+          body=$(printf 'Shard %s of the scheduled campaign reports `pass=%s` at %s draws (`ks_p=%s`, `min_p=%s`, %s parameters below 0.01).\n\nRun: %s\n\nMove the `engine=%s` line in `docs/calibration/sbc-recorded.txt`, the A11 box in `docs/ROADMAP.md` and the report the line cites with the artifact this run produced — or say here why the change is not one.\n' \
+            "$SHARD" "$VERDICT" "$DRAWS" "$KS_P" "$MIN_P" "$FAIL" "$RUN_URL" "$ENGINE")
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --label area:stats --body "$body"
+          fi

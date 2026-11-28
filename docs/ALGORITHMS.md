@@ -12,7 +12,7 @@ data, with each method's failure mode visible. ★ marks the distinctive items.
 | A5 | Plug-and-play with a learned denoiser (ONNX) | `umbra-recon` + web worker | not started (stretch) |
 | A6 ★ | Profile-likelihood scan, Asimov, Euler-characteristic LEE | `umbra-stats` | `scan` + `refine_lrt` implemented; the LEE calibration is #15 |
 | A7 ★ | Parametric Bayesian void inversion: analytic chords, MCMC, nested sampling | `umbra-infer` | parameterisation only |
-| A8 ★ | Sequential GLR / mixture-SPRT, `t_5σ ≈ 25/r` | `umbra-stats` | `time_to_five_sigma` implemented |
+| A8 ★ | Sequential GLR / mixture-SPRT, `t_5σ ≈ 25/r` | `umbra-stats` | `sprt` implemented: mixture LLR over the bank, Wald boundaries, stopping trace and the stopping-time forecast |
 | A9 ★ | Bayesian-optimal design, monotone-submodular greedy placement | `umbra-design` | utility + greedy implemented, no Asimov oracle yet |
 | A10 ★ | Fisher sensitivity, local PSF, stochastic probing, Lanczos modes, coverage roses | `umbra-vis` | Fisher diagonal implemented |
 | A11 | Laplace/Fisher covariance, parametric bootstrap, SBC | `umbra-stats` | Fisher σ map, bootstrap and SBC implemented; the recorded campaign says the bars are too narrow (see §A11) |
@@ -87,8 +87,9 @@ reported unconstrained**, not given a σ: on the shared 32-ray scene **383 of
 whatever the prior asserted. And the prior curvature is TV's *quadratic
 majoriser*, `β/ε` on every edge, not the exact Hessian — the exact Hessian is
 zero across every detected edge, which leaves the precision near-singular at
-exactly the features the bars are meant to describe (measured: every column hit
-its iteration cap, residual above `10²`). The majoriser keeps the prior's
+exactly the features the bars are meant to describe (measured at the time: every
+column hit its iteration cap, residual above `10²`; at the estimate the campaign
+fits it converges instead, see below). The majoriser keeps the prior's
 statement and slightly understates σ at a sharp boundary, which is stated here
 because it is the one place the bars are deliberately not the exact Laplace
 answer.
@@ -113,6 +114,22 @@ bias, which no σ about the estimate can cover, and part is `β/ε = 2 × 10⁴`
 neighbouring voxels to about 0.005 g cm⁻³; the campaign records the size of the
 defect and leaves the fix — a posterior that is not a quadratic majoriser — to
 A7's sampler, which the same harness will then check.
+
+**The curvature is not the lever.** The paragraph above blames the majoriser, so
+that was measured rather than assumed. `--prior exact` builds the same graph —
+one walk over the grid, so the two maps cannot disagree about the stencil — with
+`β/ε` only where the fitted difference is inside the Huber band, and the campaign
+reports both. At the same seed and size the exact curvature converges (0 columns
+unresolved, worst residual `1.0e-6`) and gives a Fisher map 1.33× wider, so the
+refits' spread is **2.09×** the Fisher map instead of 2.79× — and coverage stays
+at **7.1%**: not one voxel moves from outside the interval to inside it.
+Centring the intervals on the mean refit, which takes the estimate's bias out of
+the question, lifts coverage to **51%** against the nominal 68.27%, with a mean
+absolute bias of 0.021 g cm⁻³. So the miss is roughly half bars that are ~1.3×
+too narrow and half bias that no interval about the estimate can cover, and
+neither is reachable by a better curvature. Both halves are separate numbers in
+the report now (`docs/calibration/bootstrap-a2-2d-exact-prior.md`), so the fix
+can be checked against them instead of against their sum.
 The result card is `umbra_recon::ResultCard`, which also reports when its bars
 did not converge, so a UI can show the estimate without inventing an interval.
 

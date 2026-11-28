@@ -108,6 +108,52 @@ fn engine(args: &[String]) -> Result<Kind, Box<dyn std::error::Error>> {
     })
 }
 
+/// Which curvature the Laplace bars are built from.
+///
+/// The product reports the majoriser, and the campaign measures it against the
+/// exact curvature at the same estimate. Keeping both behind a flag is what
+/// makes the difference a measurement rather than a swap: the two maps share
+/// one walk over the grid and differ only in which edges carry `β/ε`, so a
+/// disagreement in the report is about the prior and nothing else.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Prior {
+    /// `β/ε` on every edge — what the result card shows today.
+    Majoriser,
+    /// `β/ε` only where the fitted difference is inside `ε`.
+    Exact,
+}
+
+impl Prior {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "majoriser" => Some(Prior::Majoriser),
+            "exact" => Some(Prior::Exact),
+            _ => None,
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Prior::Majoriser => "majoriser",
+            Prior::Exact => "exact",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Prior::Majoriser => "β/ε on every edge (the card's bars)",
+            Prior::Exact => "β/ε inside the Huber band, 0 on a jump",
+        }
+    }
+}
+
+/// Which prior curvature, or why not.
+fn prior(args: &[String]) -> Result<Prior, Box<dyn std::error::Error>> {
+    let name = text(args, "--prior").unwrap_or_else(|| "majoriser".to_string());
+    Prior::parse(&name)
+        .ok_or_else(|| format!("unknown prior `{name}`: expected majoriser or exact").into())
+}
+
 /// One fit of `counts` with the selected solver.
 fn fit(kind: Kind, problem: &Problem<'_>, rho_max: f32, max_iters: u32) -> Vec<f32> {
     match kind {
@@ -177,6 +223,7 @@ struct Pipeline {
     exposure_s: f32,
     params: umbra_forward::expected::ForwardParams,
     kind: Kind,
+    prior: Prior,
     posterior: usize,
     inflate: f32,
     rho_max: f32,
@@ -232,12 +279,14 @@ impl Pipeline {
         let prior = match self.kind {
             Kind::A2 => {
                 let cfg = A2Config::default();
-                Some(umbra_recon::tv_curvature(
-                    &problem,
-                    rho,
-                    cfg.beta,
-                    cfg.huber_eps,
-                ))
+                Some(match self.prior {
+                    Prior::Majoriser => {
+                        umbra_recon::tv_curvature(&problem, rho, cfg.beta, cfg.huber_eps)
+                    }
+                    Prior::Exact => {
+                        umbra_recon::tv_curvature_at(&problem, rho, cfg.beta, cfg.huber_eps)
+                    }
+                })
             }
             // No TV term, so no prior curvature: A1's card is the data-only
             // Fisher map, which on a limited-angle scene is singular and will
@@ -324,6 +373,7 @@ impl Engine for Pipeline {
 fn pipeline(
     spec: &SceneSpec,
     kind: Kind,
+    prior: Prior,
     posterior: usize,
     inflate: f32,
 ) -> Result<Pipeline, Box<dyn std::error::Error>> {
@@ -347,6 +397,7 @@ fn pipeline(
         exposure_s: spec.exposure_s,
         params: spec.forward_params(),
         kind,
+        prior,
         posterior,
         inflate,
         rho_max,
@@ -362,6 +413,7 @@ pub fn sbc(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_SCENE));
     let spec = load(&scene_path)?;
     let kind = engine(args)?;
+    let prior = prior(args)?;
     let config = SbcConfig {
         draws: number(args, "--draws").unwrap_or(500.0) as u32,
         posterior: number(args, "--posterior").unwrap_or(100.0) as u32,
@@ -373,7 +425,7 @@ pub fn sbc(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("target/sbc/report.md"));
 
-    let mut engine = pipeline(&spec, kind, config.posterior as usize, inflate)?;
+    let mut engine = pipeline(&spec, kind, prior, config.posterior as usize, inflate)?;
     let observable = engine.mask.len();
     let start = Instant::now();
     let report = run_sbc(&mut engine, config);
@@ -385,6 +437,7 @@ pub fn sbc(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         &scene_path,
         &report_path,
         kind,
+        prior,
         inflate,
         &Run {
             observable,
@@ -419,11 +472,13 @@ struct Run {
     elapsed: f64,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sbc_document(
     spec: &SceneSpec,
     scene: &Path,
     report_path: &Path,
     kind: Kind,
+    prior: Prior,
     inflate: f32,
     run: &Run,
     report: &SbcReport,
@@ -453,6 +508,11 @@ fn sbc_document(
         "| Engine | {} ({}) |\n",
         kind.id(),
         kind.description()
+    ));
+    out.push_str(&format!(
+        "| Prior curvature | {} ({}) |\n",
+        prior.id(),
+        prior.description()
     ));
     out.push_str(&format!(
         "| Posterior | Laplace marginals at the fit, {} draws |\n",
@@ -504,8 +564,10 @@ fn sbc_document(
     let projected = 10_000.0 * report.ms_per_draw / 1000.0;
     out.push_str(&format!(
         "At the measured {:.1} ms/draw, 10⁴ draws take {:.0} s — {:.1} h. That is a CI \
-         job, not a laptop run, which is why this report records the size it actually \
-         ran rather than the size spec §5.7 asks for.\n\n",
+         job rather than a laptop run, which is why this report records the size it \
+         actually ran, and why the scheduled campaign runs the spec's size as four \
+         shards of 2500 draws — one job each, so no shard outlives a runner — behind \
+         `docs/calibration/sbc-recorded.txt`.\n\n",
         report.ms_per_draw,
         projected,
         projected / 3600.0
@@ -520,9 +582,10 @@ fn sbc_document(
     out.push_str(&format!("{}\n", report.verdict_line()));
     out.push_str(&format!(
         "\nReproduced by `cargo run --release -p umbra-cli -- sbc --scene {} --engine {} \
-         --draws {} --posterior {} --seed {} --inflate {} --report {}`.\n",
+         --prior {} --draws {} --posterior {} --seed {} --inflate {} --report {}`.\n",
         scene.display(),
         kind.id(),
+        prior.id(),
         report.config.draws,
         report.config.posterior,
         report.config.seed,
@@ -539,6 +602,7 @@ pub fn bootstrap(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_SCENE));
     let spec = load(&scene_path)?;
     let kind = engine(args)?;
+    let prior = prior(args)?;
     let datasets = number(args, "--datasets").unwrap_or(30.0) as u32;
     let replicates = number(args, "--replicates").unwrap_or(40.0) as u32;
     let seed = number(args, "--seed").unwrap_or(7.0) as u64;
@@ -546,7 +610,7 @@ pub fn bootstrap(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("target/bootstrap/report.md"));
 
-    let mut engine = pipeline(&spec, kind, 0, 1.0)?;
+    let mut engine = pipeline(&spec, kind, prior, 0, 1.0)?;
     let truth = spec.density();
     let fisher_map = engine.sigma_map(&truth);
     let sigma_fisher = &fisher_map.sigma;
@@ -557,8 +621,10 @@ pub fn bootstrap(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     // the operator, so the Wilson interval is optimistic in the voxel direction
     // and the table reports both counts rather than only the rate.
     let mut inside = 0u32;
+    let mut centred = 0u32;
     let mut total = 0u32;
     let mut unusable = 0u32;
+    let mut bias_total = 0.0f64;
     let mut ratios: Vec<f32> = Vec::new();
     let mut ms_per_replicate = 0.0f64;
     let mut replicate_count = 0u32;
@@ -600,6 +666,15 @@ pub fn bootstrap(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         inside += measured.inside;
         total += measured.total;
         unusable += measured.unusable;
+        // The same intervals, centred on the mean refit instead of the estimate.
+        // Coverage against the truth mixes two failures — bars that are too
+        // narrow and an estimate that sits off the truth — and splitting them is
+        // what says which one the pipeline has.
+        let about_mean = coverage(&estimate, &map.sigma, &map.mean);
+        centred += about_mean.inside;
+        for bias in &map.bias {
+            bias_total += f64::from(bias.abs());
+        }
         for (voxel, sigma) in map.sigma.iter().enumerate() {
             if *sigma > 0.0 {
                 if let Uncertainty::Sigma(fisher) = sigma_fisher[voxel] {
@@ -622,6 +697,17 @@ pub fn bootstrap(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         elapsed,
         ms_per_replicate / f64::from(replicate_count.max(1)),
         &measured,
+        prior,
+        if total == 0 {
+            0.0
+        } else {
+            f64::from(centred) / f64::from(total)
+        },
+        if total == 0 {
+            0.0
+        } else {
+            bias_total / f64::from(total)
+        },
         unusable,
         &ratios,
         &fisher_map,
@@ -664,6 +750,9 @@ fn bootstrap_document(
     elapsed: f64,
     ms_per_replicate: f64,
     measured: &(f64, f64, f64),
+    prior: Prior,
+    centred_rate: f64,
+    mean_bias: f64,
     unusable: u32,
     ratios: &[f32],
     fisher: &SigmaMap,
@@ -691,6 +780,11 @@ fn bootstrap_document(
         "| Engine | {} ({}) |\n",
         kind.id(),
         kind.description()
+    ));
+    out.push_str(&format!(
+        "| Prior curvature | {} ({}) |\n",
+        prior.id(),
+        prior.description()
     ));
     out.push_str(&format!("| Datasets | {datasets} |\n"));
     out.push_str(&format!("| Replicates each | {replicates} |\n"));
@@ -732,6 +826,20 @@ fn bootstrap_document(
         }
     ));
     out.push_str(&format!("| Voxels with no usable σ | {unusable} |\n\n"));
+
+    out.push_str("## The same intervals, centred on the refit mean\n\n");
+    out.push_str(
+        "Coverage against the truth measures two things at once: whether the bars are \
+         the right width, and whether the estimate sits on the truth at all. Centring \
+         the interval on the mean refit removes the second, so a rate near nominal \
+         here with a low rate above says the bars are fine and the *estimate* is \
+         biased; a low rate in both says the width itself is wrong.\n\n",
+    );
+    out.push_str("| | |\n|---|---|\n");
+    out.push_str(&format!("| About the refit mean | {:.3} |\n", centred_rate));
+    out.push_str(&format!(
+        "| Mean absolute bias | {mean_bias:.4} g cm⁻³ |\n\n"
+    ));
 
     out.push_str("## Bootstrap σ against the Fisher bars\n\n");
     out.push_str(&format!(
@@ -777,9 +885,11 @@ fn bootstrap_document(
     ));
     out.push_str(&format!(
         "\nReproduced by `cargo run --release -p umbra-cli -- bootstrap --scene {} \
-         --engine {} --datasets {datasets} --replicates {replicates} --seed {} --report {}`.\n",
+         --engine {} --prior {} --datasets {datasets} --replicates {replicates} --seed {} \
+         --report {}`.\n",
         scene.display(),
         kind.id(),
+        prior.id(),
         seed,
         report_path.display()
     ));

@@ -1,0 +1,22 @@
+# A11's last recorded calibration verdict, one line per engine.
+#
+# The campaign compares itself against the line for its own engine: A1's card is
+# the data-only Fisher map and A2's is the TV-regularised one, so a verdict from
+# one engine is not evidence about the other. Within an engine, a run is
+# comparable only when it has at least as many draws as the record.
+#
+# Update the line in the same commit as the report that changes it; never on its
+# own. CI opens an issue when a comparable run moves a verdict.
+#
+# a2: `docs/calibration/sbc-a2-2d.md` — 100 draws × 100 posterior draws, seed 7,
+# 641 observable voxels. Pooled KS D = 0.4972, p < 1e-39, every one of the 641
+# parameters failing: the rank histogram is two spikes in the end bins, which is
+# what an over-confident posterior looks like. The parametric bootstrap
+# (`docs/calibration/bootstrap-a2-2d.md`) agrees from the other side: coverage
+# 7.1% against nominal 68.27%. The curvature is not the lever
+# (`docs/calibration/bootstrap-a2-2d-exact-prior.md`): the exact Huber
+# curvature at the estimate widens the Fisher map by 1.33× and leaves coverage
+# at 7.1%, because half the miss is the estimate's bias rather than the bars'
+# width. Closing this needs a posterior that is not quadratic at all — A7's
+# sampler (#18).
+verdict=FAIL engine=a2 draws=100

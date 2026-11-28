@@ -8,8 +8,8 @@ use umbra_forward::System;
 use umbra_physics::generate_default;
 use umbra_physics::Fidelity;
 use umbra_recon::{
-    tv_curvature, A1Config, A2Config, A3Config, A4Config, Control, OpacityPdhg, PoissonMap,
-    Problem, ResultCard, Solver, SolverKind, SparseDeviation, Start, TransmissionEm,
+    tv_curvature, tv_curvature_at, A1Config, A2Config, A3Config, A4Config, Control, OpacityPdhg,
+    PoissonMap, Problem, ResultCard, Solver, SolverKind, SparseDeviation, Start, TransmissionEm,
 };
 use umbra_stats::laplace::LaplaceConfig;
 
@@ -247,5 +247,68 @@ fn the_prior_keeps_a_limited_angle_grid_from_having_no_bars() {
     assert!(
         !bare.has_error_bars(),
         "32 rays cannot constrain 1024 voxels; the data-only solve must not claim it did"
+    );
+}
+
+#[test]
+fn the_exact_curvature_is_never_narrower_than_the_majoriser() {
+    // `tv_curvature` puts `β/ε` on every edge; `tv_curvature_at` drops the edges
+    // that are already past the Huber band. Dropping curvature can only widen a
+    // marginal, so wherever both maps resolve a voxel the exact one must be
+    // wider — and at a material boundary it must be strictly wider, or the two
+    // functions are the same function and the campaign's comparison is empty.
+    let golden = common::load();
+    let (system, _, counts) = common::system_and_counts();
+    let counts: Vec<f32> = counts.iter().map(|count| *count as f32).collect();
+    let flux = generate_default();
+    let problem = Problem::from_scene(&system, &counts, &golden.scene, &flux);
+    let rho = estimate::<PoissonMap>(
+        &problem,
+        &A2Config::from_scene(&golden.scene),
+        &Start::default(),
+    );
+
+    let cfg = LaplaceConfig::default();
+    let majoriser = tv_curvature(&problem, &rho, 1.0e3, 0.05);
+    let exact = tv_curvature_at(&problem, &rho, 1.0e3, 0.05);
+    let wide = ResultCard::new(
+        SolverKind::PoissonMap,
+        &problem,
+        &rho,
+        Some(&majoriser),
+        &cfg,
+    );
+    let tight = ResultCard::new(SolverKind::PoissonMap, &problem, &rho, Some(&exact), &cfg);
+    assert!(
+        wide.has_error_bars(),
+        "the majoriser's solve must converge ({} unresolved)",
+        wide.sigma.unresolved
+    );
+
+    let mut compared = 0usize;
+    let mut strictly_wider = 0usize;
+    for voxel in 0..rho.len() {
+        let (Some(before), Some(after)) =
+            (wide.sigma.at(voxel).sigma(), tight.sigma.at(voxel).sigma())
+        else {
+            continue;
+        };
+        compared += 1;
+        assert!(
+            after >= before * (1.0 - 1e-6),
+            "voxel {voxel}: the exact curvature gave {after} against the majoriser's {before}"
+        );
+        if after > before * 1.01 {
+            strictly_wider += 1;
+        }
+    }
+    assert!(
+        compared > 100,
+        "only {compared} voxels resolved under both maps"
+    );
+    assert!(
+        strictly_wider > 0,
+        "the two curvatures gave the same bars everywhere: the estimate has no edge \
+         past the Huber band, so this fixture cannot tell them apart"
     );
 }

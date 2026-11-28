@@ -92,6 +92,19 @@ cargo run -p umbra-cli --release -- sbc --engine a2 --draws 100 --posterior 100 
 cargo run -p umbra-cli --release -- bootstrap --engine a2 --datasets 40 \
     --replicates 60 --seed 7 --report docs/calibration/bootstrap-a2-2d.md
 bash tools/sbc-verdict.sh docs/calibration/sbc-a2-2d.md   # the gate reads this line
+
+# The same bootstrap with the exact Huber curvature instead of the majoriser the
+# card uses. `--prior` defaults to the card's map, so a run that omits it is
+# describing the product; this one exists to say whether the curvature is what
+# makes the bars too narrow.
+cargo run -p umbra-cli --release -- bootstrap --engine a2 --prior exact \
+    --datasets 40 --replicates 60 --seed 7 \
+    --report docs/calibration/bootstrap-a2-2d-exact-prior.md
+
+# The scheduled job's size: 10^4 draws as four shards of 2500, because one job
+# at 1.7 s/draw outlives a runner. Each shard's verdict is compared with the
+# recorded line before anything is opened.
+bash tools/sbc-compare.sh docs/calibration/sbc-recorded.txt FAIL 2500 a2
 ```
 
 ### The default scene and its golden dataset

@@ -11,6 +11,7 @@ pub mod lee;
 pub mod profile;
 pub mod sbc;
 pub mod scan;
+pub mod sprt;
 
 pub use bootstrap::{bootstrap_sigma, coverage, wilson, worst_ratio, BootstrapSigma, Coverage};
 pub use laplace::{
@@ -29,6 +30,10 @@ pub use sbc::{ks_uniform, run as run_sbc, Engine, ParameterRanks, SbcConfig, Sbc
 pub use scan::{
     chi2_mixture_p, refine_lrt, scan, scan_with_map, statistics, z_and_alpha_map, z_map,
     ScanCandidate, ScanConfig, ScanProblem, ScanResult, ScanTiming, TemplateBank,
+};
+pub use sprt::{
+    expected_steps, increment, log_likelihood_ratio, poisson_kl, poisson_stream, sprt,
+    steps_to_five_sigma, Crossing, SrtPoint, SrtTrace, Step, WaldBoundaries,
 };
 
 /// Median expected significance of `H1` against `H0`, as a `Z` value.

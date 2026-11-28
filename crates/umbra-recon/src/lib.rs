@@ -28,7 +28,7 @@ pub use a1::{A1Config, TransmissionEm};
 pub use a2::{A2Config, PoissonMap};
 pub use a3::{A3Config, OpacityPdhg};
 pub use a4::{prox, A4Config, DeviationSign, SparseDeviation};
-pub use uncertainty::{tv_curvature, ResultCard};
+pub use uncertainty::{tv_curvature, tv_curvature_at, ResultCard};
 
 /// One observation: the discretised experiment, the physics that produced the
 /// counts, and the counts themselves.
