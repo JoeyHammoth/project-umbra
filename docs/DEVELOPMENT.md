@@ -7,7 +7,7 @@
 | Rust | stable (pinned by `rust-toolchain.toml`) | compute core |
 | `wasm32-unknown-unknown` target | — | building `umbra-wasm` |
 | Node.js | 20.19+ or 22.12+ (22 LTS used in CI) | front end — Vite 8's `engines` floor |
-| `wasm-bindgen-cli` | matches the crate version | local `.wasm` bundles |
+| `wasm-bindgen-cli` | 0.2.130 | local `.wasm` bundles |
 | Python | 3.10+ | reference oracle and table generation |
 
 ```bash
@@ -22,15 +22,22 @@ cargo install wasm-bindgen-cli
 cargo build --workspace                      # native
 cargo test --workspace                       # unit + integration tests
 cargo run -p umbra-cli                       # workspace smoke check
-cargo bench                                  # criterion kernels (once added)
+cargo bench -p umbra-recon --bench portfolio   # A1–A4 per-step cost + wall-clock to shared fit target
+cargo bench -p umbra-stats --bench scan        # A6 scan vs its spec §5.11 budget (50 ms 2-D / 2 s 3-D)
+cargo bench -p umbra-stats --bench lee         # LEE calibration campaign (weekly/dispatch in CI)
 cargo build -p umbra-wasm --target wasm32-unknown-unknown --release
 
 # Web
 cd web
-npm install
-npm run dev                                  # dev server
+npm ci                                       # lockfile committed
+npm run dev                                  # compiles wasm core first, then Vite
+npm test                                     # worker bus, caches, plot geometry, verdict parser
 npm run typecheck
-npm run build
+npm run build                                # wasm + tsc + vite
+npm run build:wasm
+npm run check:browser                        # headless-Chrome round trip; needs Chrome on PATH
+npm run check:budget
+npm run preview
 ```
 
 The `.wasm` output is not committed. The web app loads it from the build
