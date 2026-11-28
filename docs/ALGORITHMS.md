@@ -136,6 +136,17 @@ sign of `TS` while leaving `α̂` correct, which is why both are tested against 
 literal definitions: 50 random candidates against a brute-force `U`/`I`, and a
 golden-section profile against the bisection.
 
+The look-elsewhere inflation that the correction must measure is visible in the
+scan before any calibration runs. `the_maximum_under_the_null_has_the_inflated_tail`
+draws 200 H0 datasets on the 10×10 model from a normal approximation to the
+Poisson counts, scans each, and records the maximum over all candidates: a mean
+of **1.72** in σ, over bins `[24, 114, 55, 7, 0, 0]` from 1σ. A single
+candidate's `Z` is standard normal under H0 by construction, so the maximum of a
+few hundred of them sitting well above 1 is the effect in miniature — the reason
+a scan's peak cannot be quoted with a local `p`. The test asserts the shape, not
+the rate; the rate that decides M3 comes from the toy campaigns in
+`docs/calibration/`, which is where a `10⁵`–`10⁶`-toy sample is affordable.
+
 Measured on 10⁶ candidates (`cargo bench -p umbra-stats --bench scan`), with
 parallel rays through every voxel — the friendliest geometry the gather can meet:
 
