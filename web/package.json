@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test src/compute/bus.test.ts src/compute/handler.test.ts src/compute/cache.test.ts src/ramp.test.ts src/plot.test.ts src/record.test.ts src/resolution.test.ts",
     "check:browser": "node scripts/check-browser.mjs",
+    "check:budget": "node scripts/check-budget.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

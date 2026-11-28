@@ -148,6 +148,14 @@ jobs:
       - name: Typecheck and build
         run: npm run build
 
+      # Spec §7.7 budgets the landing route's JavaScript at 250 KB gzip and the
+      # wasm core at 700 KB. Until this step existed both were documented and
+      # neither was measured, so the first feature to cross one would have been
+      # found by a reader rather than by a build. It reads the `dist/` the step
+      # above produced, so the numbers are this build's, not an estimate.
+      - name: Payload budgets
+        run: npm run check:budget
+
       # The unit tests run the boundary against fakes. This runs it in Chrome:
       # a worker that cannot load, a transfer list that drops the buffers or an
       # IndexedDB that never stores anything would otherwise only be visible by
