@@ -1,5 +1,11 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Question or idea
+    url: https://github.com/JoeyHammoth/project-umbra/discussions
+    about: Ask how something works, or discuss a change before opening a ticket.
+  - name: Security report
+    url: https://github.com/JoeyHammoth/project-umbra/security/advisories/new
+    about: Report a vulnerability privately. Never open a public issue for one.
   - name: Design specification
     url: https://github.com/JoeyHammoth/project-umbra/blob/main/source/UMBRA_DESIGN_SPEC.md
     about: The equations, the algorithm portfolio and the architecture this repo implements.

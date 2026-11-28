@@ -123,6 +123,13 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      # The boundary's unit tests run against fakes under `node --test`, so they
+      # need neither the wasm build nor a browser. They gate the queue, the
+      # cache, the plot geometry and the verdict parser before the build step
+      # spends minutes compiling Rust.
+      - name: Unit tests
+        run: npm test
+
       # `npm run build` compiles the compute core to WASM first, so the web job
       # needs the same target and a `wasm-bindgen` that matches Cargo.lock.
       - name: Install Rust toolchain

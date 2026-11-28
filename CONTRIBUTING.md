@@ -1,5 +1,21 @@
 # Contributing to UMBRA
 
+## Ways to contribute
+
+Everything here is real work that nobody has done yet — there are no filler
+tickets. A contribution can be a bug report with a reproduction, a docs
+correction, a test for something untested, or a slice from the roadmap.
+
+- Pick up a [`good first issue`](https://github.com/JoeyHammoth/project-umbra/issues?q=is%3Aopen+label%3A%22good+first+issue%22)
+  (~an evening) or a [`help wanted`](https://github.com/JoeyHammoth/project-umbra/issues?q=is%3Aopen+label%3A%22help+wanted%22).
+  Comment on the issue and it is yours; there is no need to ask twice.
+- Ask a question or float an approach in [Discussions](https://github.com/JoeyHammoth/project-umbra/discussions)
+  before writing anything large.
+- Improve [docs/](docs) when something confused you. The confusion is the bug.
+
+If you are unsure whether an idea fits, open an issue and describe it. Feedback
+costs nothing; a rejected PR costs a weekend.
+
 ## Shape of the work
 
 Work is tracked as GitHub issues, one tracer-bullet slice each: a narrow path that
@@ -31,7 +47,16 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 bash tools/check-licensing.sh
-cd web && npm run typecheck && npm run build
+bash tools/check-assets.sh
+cd web && npm test && npm run typecheck && npm run build
+```
+
+Run one test rather than the suite while you work:
+
+```bash
+cargo test -p umbra-recon transmission      # Rust: any substring of a test name
+cd web && npm test                          # the whole web suite is one command,
+                                            # ~1 s, so it is not worth narrowing
 ```
 
 Numeric work additionally needs, where it applies:
@@ -111,6 +136,13 @@ missing from the notices, or an unlisted or oddly licensed web asset. The
 messages name the line to add. If the answer is not in this section, open an
 issue rather than guessing — a licence mistake is the kind a revert does not
 undo.
+
+## What to expect
+
+Issues and pull requests are read in batches, usually within a week or two. If a
+thread has gone quiet and it still matters, a polite ping is welcome — it is not
+rude, it is the only notification the maintainer gets. Nothing here is a support
+contract, and saying "I have not got to this" is always an acceptable answer.
 
 ## Pull request checklist
 
