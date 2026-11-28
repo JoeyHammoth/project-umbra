@@ -15,10 +15,17 @@ import { fileURLToPath } from 'node:url';
 
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const root = path.resolve(web, '..');
+const manifest = path.join(root, 'Cargo.toml');
 const outDir = path.join(web, 'src', 'wasm');
+const { target_directory: targetDir } = JSON.parse(
+  execFileSync(
+    'cargo',
+    ['metadata', '--manifest-path', manifest, '--format-version', '1', '--no-deps'],
+    { encoding: 'utf8' },
+  ),
+);
 const artifact = path.join(
-  root,
-  'target',
+  targetDir,
   'wasm32-unknown-unknown',
   'release',
   'umbra_wasm.wasm',
@@ -29,7 +36,7 @@ execFileSync(
   [
     'build',
     '--manifest-path',
-    path.join(root, 'Cargo.toml'),
+    manifest,
     '-p',
     'umbra-wasm',
     '--target',
