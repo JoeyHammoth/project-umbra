@@ -13,7 +13,10 @@
 # the model's 4.87σ threshold: rate 1.420e-3, 5% above nominal, Wilson
 # [1.291e-3, 1.561e-3] inside the ±20% band, so the criterion is decided and M3's
 # box is checked. It replaces the 10⁵ line (128 of 100 000, floor 0.3% short),
-# which could not decide.
+# which could not decide. A repeat at the same size on an unused seed
+# (`lee-2d-3e5-fresh-seed.md`) returns 441 of 300 000, rate 1.470e-3, inside the
+# band too, and 0.5σ of the pooled count from this line — corroboration, so the
+# line stands as the sample that decided the criterion.
 verdict=PASS toys=300000 dim=2 rate=1.420e-3 low=1.291e-3 high=1.561e-3 threshold=4.87 needs=136483
 #
 # 3-D: `docs/calibration/lee-3d-24-1e6.md` — 10⁶ toys on the 24³ volume, where a
