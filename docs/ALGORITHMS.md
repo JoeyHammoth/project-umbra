@@ -306,7 +306,13 @@ model's 4.87σ threshold — rate 1.420e-3, 5% above nominal, Wilson 95%
 [1.291e-3, 1.561e-3], inside the ±20% band — while the extrapolation held to
 1.01× at 3σ. That run cost 5.2 hours on sixteen threads over `10⁶` voxels and
 scaled only 6.4× over four, which is why the gate sizes its follow-ups instead of
-raising the toy count by habit.
+raising the toy count by habit. Repeating that campaign at the same size on a seed
+that had never been used
+([`docs/calibration/lee-2d-3e5-fresh-seed.md`](calibration/lee-2d-3e5-fresh-seed.md))
+lands inside the band again — 441 of 300 000, rate 1.470e-3, Wilson
+[1.339e-3, 1.614e-3] — and the two counts differ by 0.5σ of their pooled 867, so
+the PASS belongs to the campaign's size rather than to the seed that first
+produced it.
 
 The campaign now acts on its own result rather than waiting for a reader. Its
 report ends with a machine-readable verdict line, `tools/lee-verdict.sh` reads
