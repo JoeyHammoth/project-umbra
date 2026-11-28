@@ -15,7 +15,7 @@ data, with each method's failure mode visible. ★ marks the distinctive items.
 | A8 ★ | Sequential GLR / mixture-SPRT, `t_5σ ≈ 25/r` | `umbra-stats` | `time_to_five_sigma` implemented |
 | A9 ★ | Bayesian-optimal design, monotone-submodular greedy placement | `umbra-design` | utility + greedy implemented, no Asimov oracle yet |
 | A10 ★ | Fisher sensitivity, local PSF, stochastic probing, Lanczos modes, coverage roses | `umbra-vis` | Fisher diagonal implemented |
-| A11 | Laplace/Fisher covariance, parametric bootstrap, SBC | `umbra-stats` | Fisher σ map implemented; bootstrap and SBC next |
+| A11 | Laplace/Fisher covariance, parametric bootstrap, SBC | `umbra-stats` | Fisher σ map, bootstrap and SBC implemented; the recorded campaign says the bars are too narrow (see §A11) |
 | A12 | Event-level muon Monte Carlo | `umbra-physics` | not started |
 | A13 ★ | Amortised SBI (NPE) via ONNX, validated with SBC/TARP | offline + `umbra-infer` | not started (stretch) |
 
@@ -98,6 +98,21 @@ difference, so the uniform field is an exact null direction and the effective
 condition number leaves f64 (a diverging CG residual, not a slow one). A level
 prior of ±0.5 g cm⁻³ on the mean density constrains that one direction and
 nothing else; it is a statement about the scene, so it is a configuration value.
+
+**What the campaign found.** The bars above are now measured rather than
+asserted. `umbra sbc` (100 draws × 100 posterior draws, seed 7, 641 observable
+voxels) puts the pooled rank histogram at KS `D = 0.4972`, `p < 1e-39`, with
+every rank in the two end bins and all 641 parameters failing individually: the
+posterior drawn from the Laplace marginals is far narrower than the truth, which
+is the over-confidence signature. The parametric bootstrap says the same from the
+other side (`docs/calibration/bootstrap-a2-2d.md`, 40 datasets × 60 replicates):
+`|ρ̂ − ρ_true| ≤ σ̂` holds for **7.1%** of voxels against the nominal 68.27%
+(Wilson 95% [6.8, 7.4]%), and the refits' own spread is **2.79×** the Fisher map.
+Two independent instruments, one conclusion. Part of the gap is the TV prior's
+bias, which no σ about the estimate can cover, and part is `β/ε = 2 × 10⁴` pinning
+neighbouring voxels to about 0.005 g cm⁻³; the campaign records the size of the
+defect and leaves the fix — a posterior that is not a quadratic majoriser — to
+A7's sampler, which the same harness will then check.
 The result card is `umbra_recon::ResultCard`, which also reports when its bars
 did not converge, so a UI can show the estimate without inventing an interval.
 
@@ -146,6 +161,11 @@ few hundred of them sitting well above 1 is the effect in miniature — the reas
 a scan's peak cannot be quoted with a local `p`. The test asserts the shape, not
 the rate; the rate that decides M3 comes from the toy campaigns in
 `docs/calibration/`, which is where a `10⁵`–`10⁶`-toy sample is affordable.
+
+> **Historical record.** The table below is the measurement that drove the band-gather
+> rewrite, not the current status of the 2-D budget. The number CI enforces is recorded
+> in `docs/ROADMAP.md` (M3), taken on the runner that enforces it, and the two machines
+> are not comparable. Read this as evidence for the optimisation, not as today's timing.
 
 Measured on 10⁶ candidates (`cargo bench -p umbra-stats --bench scan`), with
 parallel rays through every voxel — the friendliest geometry the gather can meet:

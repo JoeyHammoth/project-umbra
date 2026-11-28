@@ -5,11 +5,14 @@
 //! is the Asimov test statistic, because both the detection scan and the
 //! experiment-design utilities are expressed in terms of it.
 
+pub mod bootstrap;
 pub mod laplace;
 pub mod lee;
 pub mod profile;
+pub mod sbc;
 pub mod scan;
 
+pub use bootstrap::{bootstrap_sigma, coverage, wilson, worst_ratio, BootstrapSigma, Coverage};
 pub use laplace::{
     poisson_laplace, GraphCurvature, LaplaceConfig, PoissonProblem, SigmaMap, Uncertainty,
 };
@@ -22,6 +25,7 @@ pub use profile::{
     profile_candidate, profile_p, CandidateProfile, NuisanceFit, NuisancePrior, ProfilerConfig,
     SystematicsReport,
 };
+pub use sbc::{ks_uniform, run as run_sbc, Engine, ParameterRanks, SbcConfig, SbcReport};
 pub use scan::{
     chi2_mixture_p, refine_lrt, scan, scan_with_map, statistics, z_and_alpha_map, z_map,
     ScanCandidate, ScanConfig, ScanProblem, ScanResult, ScanTiming, TemplateBank,
