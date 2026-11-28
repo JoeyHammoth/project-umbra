@@ -6,10 +6,11 @@ Counts are re-drawn from the fitted `λ̂` and the same solver refits each repli
 |---|---|
 | Scene | `default-slab` (Default slab with a known corridor void) |
 | Engine | a2 (Poisson MAP with Huber TV) |
+| Prior curvature | majoriser (β/ε on every edge (the card's bars)) |
 | Datasets | 40 |
 | Replicates each | 60 |
 | Seed | `0x7` |
-| Cost | 9.7 ms/replicate, 23.8 s total |
+| Cost | 23.4 ms/replicate, 56.9 s total |
 | Observable voxels | 641 of 1024 |
 | Fisher solve | 0 unresolved, worst residual 9.99e-7 |
 
@@ -24,13 +25,22 @@ Nominal 68.27%: the fraction of voxels with `|ρ̂ − ρ_true| ≤ σ̂`. Voxel
 | Contains 0.6827 | no |
 | Voxels with no usable σ | 514 |
 
+## The same intervals, centred on the refit mean
+
+Coverage against the truth measures two things at once: whether the bars are the right width, and whether the estimate sits on the truth at all. Centring the interval on the mean refit removes the second, so a rate near nominal here with a low rate above says the bars are fine and the *estimate* is biased; a low rate in both says the width itself is wrong.
+
+| | |
+|---|---|
+| About the refit mean | 0.512 |
+| Mean absolute bias | 0.0210 g cm⁻³ |
+
 ## Bootstrap σ against the Fisher bars
 
 Median ratio of bootstrap σ to Fisher σ over every covered voxel: **2.79×**. A ratio below 1 means the Laplace bars are wider than the refits actually move, which is what a prior does where the data are weak; above 1 means they are too narrow.
 
 ## What a decision would need
 
-A ±2% decision on the mean spread needs 2500 replicates per dataset (`1/0.02²`). At 9.7 ms each that is 0.4 min per dataset, and this report's 60 replicates give a ±12.9% interval on the spread.
+A ±2% decision on the mean spread needs 2500 replicates per dataset (`1/0.02²`). At 23.4 ms each that is 1.0 min per dataset, and this report's 60 replicates give a ±12.9% interval on the spread.
 
 ## Verdict
 
@@ -38,4 +48,4 @@ Coverage 0.071 with Wilson [0.068, 0.073]; nominal 0.6827 is outside the interva
 
 <!-- bootstrap-verdict engine=a2 datasets=40 replicates=60 coverage=0.0709 low=0.0684 high=0.0735 contains_nominal=false -->
 
-Reproduced by `cargo run --release -p umbra-cli -- bootstrap --scene web/src/scenes/default.json --engine a2 --datasets 40 --replicates 60 --seed 7 --report docs/calibration/bootstrap-a2-2d.md`.
+Reproduced by `cargo run --release -p umbra-cli -- bootstrap --scene web/src/scenes/default.json --engine a2 --prior majoriser --datasets 40 --replicates 60 --seed 7 --report docs/calibration/bootstrap-a2-2d.md`.

@@ -105,6 +105,61 @@ pub fn tv_curvature(
     beta: f32,
     huber_eps: f32,
 ) -> GraphCurvature {
+    curvature_with(problem, rho, beta, huber_eps, |_| true)
+}
+
+/// The same prior, evaluated **at** the estimate: `β/ε` on edges whose density
+/// difference is inside the Huber band and zero on edges that are already a
+/// jump.
+///
+/// [`tv_curvature`] puts `β/ε` on every edge, including the ones where the TV
+/// term is linear and therefore has no curvature at all. That is a majoriser —
+/// never smaller than the true curvature — so it can only make the bars too
+/// narrow, never too wide. This is the curvature the Laplace approximation
+/// actually asks for, and the difference between the two is largest exactly at
+/// the material boundaries a reconstruction is about.
+///
+/// It is not free: at a jump the prior stops constraining the direction, and a
+/// limited-angle scene may leave that direction with almost no data curvature
+/// either. A caller that gets a non-converged [`SigmaMap`] from this curvature
+/// has learned something the majoriser was hiding, which is why the campaign
+/// reports both rather than swapping one for the other on a hunch.
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`tv_curvature`].
+pub fn tv_curvature_at(
+    problem: &Problem<'_>,
+    rho: &[f32],
+    beta: f32,
+    huber_eps: f32,
+) -> GraphCurvature {
+    assert!(
+        huber_eps.is_finite() && huber_eps > 0.0,
+        "the Huber scale must be positive"
+    );
+    let eps = f64::from(huber_eps);
+    curvature_with(problem, rho, beta, huber_eps, move |difference| {
+        difference.abs() <= eps
+    })
+}
+
+/// The shared walk over the four-neighbour grid, with `inside` deciding which
+/// edges carry curvature.
+///
+/// One implementation so the majoriser and the exact curvature cannot disagree
+/// about the graph they are built on: a mismatched stencil would show up as a
+/// difference between the two maps that has nothing to do with the prior.
+fn curvature_with<F>(
+    problem: &Problem<'_>,
+    rho: &[f32],
+    beta: f32,
+    huber_eps: f32,
+    mut inside: F,
+) -> GraphCurvature
+where
+    F: FnMut(f64) -> bool,
+{
     assert!(
         huber_eps.is_finite() && huber_eps > 0.0,
         "the Huber scale must be positive"
@@ -132,10 +187,16 @@ pub fn tv_curvature(
         for i in 0..nx {
             let here = i + nx * j;
             if i + 1 < nx {
-                curvature.add_edge(here, here + 1, weight);
+                let difference = f64::from(rho[here]) - f64::from(rho[here + 1]);
+                if inside(difference) {
+                    curvature.add_edge(here, here + 1, weight);
+                }
             }
             if j + 1 < ny {
-                curvature.add_edge(here, here + nx, weight);
+                let difference = f64::from(rho[here]) - f64::from(rho[here + nx]);
+                if inside(difference) {
+                    curvature.add_edge(here, here + nx, weight);
+                }
             }
         }
     }
