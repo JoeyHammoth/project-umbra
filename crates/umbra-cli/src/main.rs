@@ -9,6 +9,8 @@
 //! | `umbra golden [--scene FILE] [--out FILE]` | regenerate the committed golden dataset |
 //! | `umbra selftest [--scene FILE]` | load the default scene, evaluate the forward model, check the adjoint |
 //! | `umbra bench` | timings for a 128 x 128 system |
+//! | `umbra sbc [--scene FILE] [--engine a1\|a2] [--draws N] [--seed S] [--report FILE]` | SBC rank histograms and the recorded verdict line (A11) |
+//! | `umbra bootstrap [--scene FILE] [--engine a1\|a2] [--datasets N] [--replicates N] [--seed S] [--report FILE]` | parametric-bootstrap σ map and coverage (A11) |
 //!
 //! The table generator and the golden writer are build-time tools, not runtime
 //! dependencies: the app loads the committed `.bin` from
@@ -31,6 +33,8 @@ use umbra_physics::{
     de_min_dx, e_min, generate_default, AngularBinning, Detector, Pose, STANDARD_ROCK_A,
     STANDARD_ROCK_B, TABLE_VERSION,
 };
+
+mod campaign;
 
 /// The shared default scene (spec §8.1, §8.2).
 const DEFAULT_SCENE: &str = "web/src/scenes/default.json";
@@ -66,6 +70,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             bench();
             Ok(())
         }
+        Some("sbc") => campaign::sbc(&args),
+        Some("bootstrap") => campaign::bootstrap(&args),
         Some("selftest") | None => {
             let scene = flag(&args, "--scene").unwrap_or_else(|| PathBuf::from(DEFAULT_SCENE));
             selftest(&scene)
@@ -74,7 +80,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("unknown subcommand `{other}`");
             eprintln!(
                 "usage: umbra <gen-flux [--out DIR] | scene [--scene FILE] | \
-                 golden [--scene FILE] [--out FILE] | selftest [--scene FILE] | bench>"
+                 golden [--scene FILE] [--out FILE] | selftest [--scene FILE] | bench | \
+                 sbc [--scene FILE] [--engine a1|a2] [--draws N] [--seed S] [--report FILE] | \
+                 bootstrap [--scene FILE] [--engine a1|a2] [--datasets N] [--replicates N] \
+                 [--seed S] [--report FILE]>"
             );
             std::process::exit(2);
         }

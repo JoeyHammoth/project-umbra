@@ -84,6 +84,14 @@ cargo run -p umbra-cli -- scene              # load, validate and report the def
 cargo run -p umbra-cli -- golden             # regenerate the golden dataset
 cargo run -p umbra-cli -- selftest           # load the default scene, evaluate L1, check the adjoint
 cargo run -p umbra-cli --release -- bench    # build + forward-model timings
+
+# Calibration campaigns (A11). Both write a report with a machine-readable
+# verdict line; the recorded runs live in docs/calibration/.
+cargo run -p umbra-cli --release -- sbc --engine a2 --draws 100 --posterior 100 \
+    --seed 7 --report docs/calibration/sbc-a2-2d.md
+cargo run -p umbra-cli --release -- bootstrap --engine a2 --datasets 40 \
+    --replicates 60 --seed 7 --report docs/calibration/bootstrap-a2-2d.md
+bash tools/sbc-verdict.sh docs/calibration/sbc-a2-2d.md   # the gate reads this line
 ```
 
 ### The default scene and its golden dataset

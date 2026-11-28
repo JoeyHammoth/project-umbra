@@ -110,6 +110,7 @@ dependencies = [
  "umbra-core",
  "umbra-forward",
  "umbra-physics",
+ "umbra-recon",
  "umbra-stats",
 ]
 

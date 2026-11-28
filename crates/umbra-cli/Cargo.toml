@@ -15,4 +15,5 @@ path = "src/main.rs"
 umbra-core.workspace = true
 umbra-physics.workspace = true
 umbra-forward.workspace = true
+umbra-recon.workspace = true
 umbra-stats.workspace = true
