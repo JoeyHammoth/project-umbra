@@ -1,5 +1,10 @@
 # UMBRA — An Interactive Muon-Tomography Observatory
 
+<p align="center">
+  <a href="https://github.com/JoeyHammoth/project-umbra/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/JoeyHammoth/project-umbra/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="LICENSE"><img alt="Licence: MIT" src="https://img.shields.io/badge/licence-MIT-blue"></a>
+</p>
+
 Cosmic-ray muons image the inside of large structures. Stone absorbs them far
 more than air, so a hidden chamber shows up as an excess of muons from a
 particular direction — that is how the ScanPyramids team found the Big Void in
@@ -10,9 +15,30 @@ are we, and where should the next detector go?
 
 Everything runs client-side. Static hosting, no accounts, no backend, £0/month.
 
-> **Status: scaffold.** The Rust workspace, the web shell, the CI gates and the
-> documentation map exist. No physics is implemented yet beyond the range–energy
-> relation and the core linear algebra; see [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: early, but it runs end to end.** A 2-D scene is traversed into a CSR
+> path-length operator, counts are simulated from it, A1 and A2 reconstruct them,
+> and the A6 scan reports a global significance calibrated against a
+> 3×10⁵-toy campaign on the plane and a 10⁶-toy campaign on a volume, both
+> passing ([docs/ROADMAP.md](docs/ROADMAP.md)). A8/A11 close out M3;
+> inference, experiment design and the observatory (M4–M6) are still open.
+
+## Why UMBRA?
+
+- **The problem.** Muon tomography is usually taught as a picture — muons pass
+  through, dense rock blocks them — and the picture hides the three parts that
+  decide whether a result means anything: the inverse problem is limited-angle,
+  the statistics are a look-elsewhere effect over millions of candidate voids,
+  and the next detector placement decides whether the answer was ever reachable.
+  UMBRA makes each of those something you can turn a dial on and watch.
+- **Who it is for.** Physicists and engineers learning muography, and anyone who
+  wants to see why an uncorrected 3σ local excess is not a discovery.
+- **How it differs.** Geant4, and the muography codes built on it, is the right
+  tool for simulating a real detector at the particle level; it is not built to
+  run in a tab or to explain a significance to you. Published monument analyses
+  are bespoke pipelines fitted to one structure. UMBRA is deliberately a
+  validated approximation with documented error — the approximations are listed
+  in [docs/PHYSICS.md](docs/PHYSICS.md) — and the error is shown on screen rather
+  than left in a paper.
 
 ## What it will do
 
@@ -41,7 +67,7 @@ cargo test --workspace
 cargo run -p umbra-cli
 
 # front end
-cd web && npm install && npm run dev
+cd web && npm ci && npm run dev
 ```
 
 The design specification, including all the equations, the algorithm portfolio,
@@ -66,9 +92,24 @@ in [source/ctlab](source/ctlab).
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Short version: one ticket per branch,
-conventional commit subjects, `cargo test --workspace` and `npm run typecheck`
-green, and PRs that state acceptance criteria and evidence.
+Contributions are welcome, including docs fixes and a failing test for a bug you
+found. See [CONTRIBUTING.md](CONTRIBUTING.md); the short version is one ticket
+per branch, a conventional commit subject, and PRs that state acceptance
+criteria and evidence.
+
+New here? Look for [`good first issue`](https://github.com/JoeyHammoth/project-umbra/issues?q=is%3Aopen+label%3A%22good+first+issue%22)
+for something sized to an evening, or [`help wanted`](https://github.com/JoeyHammoth/project-umbra/issues?q=is%3Aopen+label%3A%22help+wanted%22)
+for work that needs a hand. Comment on the issue and it is yours.
+
+## Support
+
+| I want to… | Go here |
+|---|---|
+| Ask a question or float an idea | [Discussions](https://github.com/JoeyHammoth/project-umbra/discussions) |
+| Report a bug or request work | [Issues](https://github.com/JoeyHammoth/project-umbra/issues/new/choose) |
+| Report a vulnerability | [SECURITY.md](SECURITY.md) — privately, never in an issue |
+
+More in [SUPPORT.md](SUPPORT.md).
 
 ## Scientific honesty
 
